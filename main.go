@@ -1,0 +1,304 @@
+package main
+
+import (
+	"context"
+	"embed"
+	"fmt"
+	"io/fs"
+
+	"openai-router-go/internal/config"
+	"openai-router-go/internal/database"
+	"openai-router-go/internal/router"
+	"openai-router-go/internal/service"
+	"openai-router-go/internal/system"
+
+	"github.com/gin-gonic/gin"
+	log "github.com/sirupsen/logrus"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+//go:embed frontend/dist
+var assets embed.FS
+
+func main() {
+	// 初始化日志
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
+	log.SetLevel(log.InfoLevel)
+
+	// 加载配置
+	cfg := config.LoadConfig()
+
+	// 初始化数据库
+	db, err := database.InitDB(cfg.DatabasePath)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer db.Close()
+
+	// 创建服务
+	routeService := service.NewRouteService(db)
+	proxyService := service.NewProxyService(routeService, cfg)
+
+	// 初始化开机自启动管理器
+	autoStart := system.NewAutoStart()
+
+	// 创建应用实例
+	app := &App{
+		routeService: routeService,
+		proxyService: proxyService,
+		config:       cfg,
+		autoStart:    autoStart,
+	}
+
+	// 启动后台 API 服务器
+	go func() {
+		gin.SetMode(gin.ReleaseMode)
+		r := router.SetupAPIRouter(cfg, routeService, proxyService)
+		addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+		log.Infof("API server started at %s/api", addr)
+		if err := r.Run(addr); err != nil {
+			log.Errorf("Failed to start API server: %v", err)
+		}
+	}()
+
+	// 创建 Wails 应用
+	log.Info("Starting Wails application...")
+
+	// 从 embed.FS 中提取 frontend/dist 子目录
+	distFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatalf("Failed to get dist subdirectory: %v", err)
+	}
+
+	err = wails.Run(&options.App{
+		Title:  "OpenAI Router Manager",
+		Width:  1280,
+		Height: 800,
+		AssetServer: &assetserver.Options{
+			Assets: distFS,
+		},
+		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		OnStartup:        app.startup,
+		OnBeforeClose:    app.beforeClose,
+		Bind: []interface{}{
+			app,
+		},
+	})
+
+	if err != nil {
+		log.Fatalf("Error running Wails app: %v", err)
+	}
+}
+
+// App 结构体用于 Wails 绑定
+type App struct {
+	ctx          context.Context
+	routeService *service.RouteService
+	proxyService *service.ProxyService
+	config       *config.Config
+	autoStart    *system.AutoStart
+	systemTray   *system.SystemTray
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	log.Info("=== Wails application startup callback executed ===")
+	log.Infof("Route service: %v", a.routeService != nil)
+	log.Infof("Proxy service: %v", a.proxyService != nil)
+	log.Infof("Config loaded: %v", a.config != nil)
+
+	// 初始化系统托盘
+	a.systemTray = system.NewSystemTray(ctx)
+	if err := a.systemTray.Setup(); err != nil {
+		log.Warnf("Failed to setup system tray: %v", err)
+	}
+}
+
+// beforeClose 在窗口关闭前调用
+func (a *App) beforeClose(ctx context.Context) (prevent bool) {
+	// 如果启用了最小化到托盘，则隐藏窗口而不退出
+	if a.config.MinimizeToTray {
+		log.Info("Minimizing to tray instead of closing")
+		runtime.WindowHide(a.ctx)
+		return true // 阻止关闭
+	}
+
+	log.Info("Application closing")
+	return false // 允许关闭
+}
+
+// GetRoutes 获取所有路由
+func (a *App) GetRoutes() ([]map[string]interface{}, error) {
+	routes, err := a.routeService.GetAllRoutes()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]map[string]interface{}, len(routes))
+	for i, route := range routes {
+		result[i] = map[string]interface{}{
+			"id":      route.ID,
+			"name":    route.Name,
+			"model":   route.Model,
+			"api_url": route.APIUrl,
+			"api_key": route.APIKey,
+			"group":   route.Group,
+			"enabled": route.Enabled,
+			"created": route.CreatedAt,
+			"updated": route.UpdatedAt,
+		}
+	}
+	return result, nil
+}
+
+// AddRoute 添加路由
+func (a *App) AddRoute(name, model, apiUrl, apiKey, group string) error {
+	return a.routeService.AddRoute(name, model, apiUrl, apiKey, group)
+}
+
+// UpdateRoute 更新路由
+func (a *App) UpdateRoute(id int64, name, model, apiUrl, apiKey, group string) error {
+	return a.routeService.UpdateRoute(id, name, model, apiUrl, apiKey, group)
+}
+
+// DeleteRoute 删除路由
+func (a *App) DeleteRoute(id int64) error {
+	return a.routeService.DeleteRoute(id)
+}
+
+// GetStats 获取统计信息
+func (a *App) GetStats() (map[string]interface{}, error) {
+	stats, err := a.routeService.GetStats()
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+// GetDailyStats 获取每日统计（用于热力图）
+func (a *App) GetDailyStats(days int) ([]map[string]interface{}, error) {
+	return a.routeService.GetDailyStats(days)
+}
+
+// GetHourlyStats 获取今日按小时统计（用于折线图）
+func (a *App) GetHourlyStats() ([]map[string]interface{}, error) {
+	return a.routeService.GetHourlyStats()
+}
+
+// GetModelRanking 获取模型使用排行
+func (a *App) GetModelRanking(limit int) ([]map[string]interface{}, error) {
+	return a.routeService.GetModelRanking(limit)
+}
+
+// GetConfig 获取配置
+func (a *App) GetConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"localApiKey":         a.config.LocalAPIKey,
+		"localApiEndpoint":    fmt.Sprintf("http://%s:%d/api", a.config.Host, a.config.Port),
+		"redirectEnabled":     a.config.RedirectEnabled,
+		"redirectKeyword":     a.config.RedirectKeyword,
+		"redirectTargetModel": a.config.RedirectTargetModel,
+		"redirectTargetName":  a.config.RedirectTargetName,
+		"minimizeToTray":      a.config.MinimizeToTray,
+		"autoStart":           a.config.AutoStart,
+	}
+}
+
+// UpdateConfig 更新配置
+func (a *App) UpdateConfig(redirectEnabled bool, redirectKeyword, redirectTargetModel string) error {
+	a.config.RedirectEnabled = redirectEnabled
+	a.config.RedirectKeyword = redirectKeyword
+	a.config.RedirectTargetModel = redirectTargetModel
+	return a.config.Save()
+}
+
+// FetchRemoteModels 获取远程模型列表
+func (a *App) FetchRemoteModels(apiUrl, apiKey string) ([]string, error) {
+	return a.proxyService.FetchRemoteModels(apiUrl, apiKey)
+}
+
+// GetAppSettings 获取应用设置
+func (a *App) GetAppSettings() map[string]interface{} {
+	autoStartEnabled := false
+	if a.autoStart != nil {
+		autoStartEnabled = a.autoStart.IsAutoStartEnabled()
+	}
+
+	return map[string]interface{}{
+		"minimizeToTray":   a.config.MinimizeToTray,
+		"autoStart":        a.config.AutoStart,
+		"autoStartEnabled": autoStartEnabled,
+	}
+}
+
+// SetMinimizeToTray 设置关闭时最小化到托盘
+func (a *App) SetMinimizeToTray(enabled bool) error {
+	log.Infof("Setting minimize to tray: %v", enabled)
+	a.config.MinimizeToTray = enabled
+
+	if err := a.config.Save(); err != nil {
+		log.Errorf("Failed to save config: %v", err)
+		return fmt.Errorf("failed to save config: %v", err)
+	}
+
+	log.Info("Minimize to tray setting updated successfully")
+	return nil
+}
+
+// SetAutoStart 设置开机自启动
+func (a *App) SetAutoStart(enabled bool) error {
+	log.Infof("Setting auto-start: %v", enabled)
+
+	if a.autoStart == nil {
+		log.Error("Auto-start manager not initialized")
+		return fmt.Errorf("auto-start manager not initialized")
+	}
+
+	// 更新注册表
+	if enabled {
+		if err := a.autoStart.EnableAutoStart(); err != nil {
+			log.Errorf("Failed to enable auto-start: %v", err)
+			return fmt.Errorf("failed to enable auto-start: %v", err)
+		}
+	} else {
+		if err := a.autoStart.DisableAutoStart(); err != nil {
+			log.Errorf("Failed to disable auto-start: %v", err)
+			return fmt.Errorf("failed to disable auto-start: %v", err)
+		}
+	}
+
+	// 更新配置
+	a.config.AutoStart = enabled
+	if err := a.config.Save(); err != nil {
+		log.Errorf("Failed to save config: %v", err)
+		return fmt.Errorf("failed to save config: %v", err)
+	}
+
+	log.Info("Auto-start setting updated successfully")
+	return nil
+}
+
+// ShowWindow 显示窗口
+func (a *App) ShowWindow() {
+	log.Info("Showing window")
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+}
+
+// HideWindow 隐藏窗口
+func (a *App) HideWindow() {
+	log.Info("Hiding window")
+	runtime.WindowHide(a.ctx)
+}
+
+// QuitApp 退出应用
+func (a *App) QuitApp() {
+	log.Info("Quitting application")
+	a.config.MinimizeToTray = false
+	runtime.Quit(a.ctx)
+}

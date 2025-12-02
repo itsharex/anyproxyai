@@ -1,0 +1,1665 @@
+<template>
+  <n-config-provider :theme="isDark ? darkTheme : null" :theme-overrides="themeOverrides">
+    <n-layout style="height: 100vh;">
+      <!-- Top Bar -->
+      <n-layout-header bordered style="height: 64px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <n-icon size="32" color="#18a058">
+            <ServerIcon />
+          </n-icon>
+          <span style="font-size: 20px; font-weight: 600;">OpenAI Router</span>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <n-button
+            :type="currentPage === 'home' ? 'primary' : 'default'"
+            :ghost="currentPage !== 'home'"
+            @click="currentPage = 'home'"
+          >
+            <template #icon>
+              <n-icon><HomeIcon /></n-icon>
+            </template>
+            主页
+          </n-button>
+
+          <n-button
+            :type="currentPage === 'models' ? 'primary' : 'default'"
+            :ghost="currentPage !== 'models'"
+            @click="currentPage = 'models'"
+          >
+            <template #icon>
+              <n-icon><ListIcon /></n-icon>
+            </template>
+            模型列表
+          </n-button>
+
+          <n-button
+            :type="currentPage === 'stats' ? 'primary' : 'default'"
+            :ghost="currentPage !== 'stats'"
+            @click="currentPage = 'stats'"
+          >
+            <template #icon>
+              <n-icon><BarChartIcon /></n-icon>
+            </template>
+            使用状态
+          </n-button>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 16px;">
+          <n-button quaternary circle @click="refreshAll" :loading="refreshing">
+            <template #icon>
+              <n-icon :size="20">
+                <RefreshIcon />
+              </n-icon>
+            </template>
+          </n-button>
+
+          <n-button quaternary circle @click="currentPage = 'settings'">
+            <template #icon>
+              <n-icon :size="20">
+                <SettingsIcon />
+              </n-icon>
+            </template>
+          </n-button>
+
+          <n-button quaternary circle @click="toggleTheme">
+            <template #icon>
+              <n-icon>
+                <MoonIcon v-if="isDark" />
+                <SunnyIcon v-else />
+              </n-icon>
+            </template>
+          </n-button>
+
+          <n-button type="primary" @click="showAddModal = true">
+            <template #icon>
+              <n-icon><AddIcon /></n-icon>
+            </template>
+            添加路由
+          </n-button>
+        </div>
+      </n-layout-header>
+
+      <!-- Main Content -->
+      <n-layout-content style="padding: 24px; overflow: auto;">
+        <!-- Home Page -->
+        <div v-if="currentPage === 'home'">
+          <!-- Stats Cards -->
+          <n-grid :cols="4" :x-gap="16" :y-gap="16" style="margin-bottom: 24px;">
+            <n-grid-item>
+              <n-card :bordered="false" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                <n-statistic label="路由总数" :value="stats.route_count">
+                  <template #prefix>
+                    <n-icon size="24" color="#fff">
+                      <GitNetworkIcon />
+                    </n-icon>
+                  </template>
+                </n-statistic>
+              </n-card>
+            </n-grid-item>
+
+            <n-grid-item>
+              <n-card :bordered="false" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                <n-statistic label="模型总数" :value="stats.model_count">
+                  <template #prefix>
+                    <n-icon size="24" color="#fff">
+                      <CubeIcon />
+                    </n-icon>
+                  </template>
+                </n-statistic>
+              </n-card>
+            </n-grid-item>
+
+            <n-grid-item>
+              <n-card :bordered="false" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                <n-statistic label="请求总数" :value="stats.total_requests">
+                  <template #prefix>
+                    <n-icon size="24" color="#fff">
+                      <StatsChartIcon />
+                    </n-icon>
+                  </template>
+                </n-statistic>
+              </n-card>
+            </n-grid-item>
+
+            <n-grid-item>
+              <n-card :bordered="false" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                <n-statistic label="今日 Token" :value="formatNumber(stats.today_tokens || 0)">
+                  <template #prefix>
+                    <n-icon size="24" color="#fff">
+                      <FlashIcon />
+                    </n-icon>
+                  </template>
+                </n-statistic>
+              </n-card>
+            </n-grid-item>
+          </n-grid>
+
+          <!-- Redirect Config -->
+          <n-card title="🔀 代理重定向配置" style="margin-bottom: 24px;" :bordered="false">
+            <n-space vertical>
+              <n-space align="center">
+                <span>启用重定向:</span>
+                <n-switch v-model:value="redirectConfig.enabled" @update:value="saveRedirectConfig" />
+              </n-space>
+
+              <n-space align="center" v-if="redirectConfig.enabled">
+                <n-tag type="info" size="large" style="font-family: monospace;">
+                  {{ redirectConfig.keyword }}
+                </n-tag>
+                <n-icon size="20"><ArrowForwardIcon /></n-icon>
+                <n-tag type="success" size="large" style="font-family: monospace;">
+                  {{ redirectConfig.targetModel || '未配置' }}
+                </n-tag>
+                <n-tag v-if="redirectConfig.targetName" type="warning" size="large">
+                  ({{ redirectConfig.targetName }})
+                </n-tag>
+                <!-- 跳转按钮 -->
+                <n-button
+                  v-if="redirectConfig.targetModel"
+                  size="small"
+                  @click="jumpToTargetModel"
+                >
+                  <template #icon>
+                    <n-icon><LocationIcon /></n-icon>
+                  </template>
+                  跳转到目标模型
+                </n-button>
+              </n-space>
+            </n-space>
+          </n-card>
+
+          <!-- API Config -->
+          <n-card title="🔑 本地 API 配置" style="margin-bottom: 24px;" :bordered="false">
+            <n-grid :cols="2" :x-gap="24">
+              <!-- 左侧: OpenAI 兼容接口 -->
+              <n-grid-item>
+                <n-space vertical :size="12">
+                  <n-text strong style="font-size: 14px;">OpenAI 兼容接口</n-text>
+                  <n-text depth="3" style="font-size: 12px;">标准的 OpenAI API 格式接口</n-text>
+
+                  <div>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">API 地址</n-text>
+                    <n-input
+                      :value="config.localApiEndpoint"
+                      readonly
+                      size="large"
+                    >
+                      <template #suffix>
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint)">
+                          <template #icon>
+                            <n-icon><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                    </n-input>
+                  </div>
+
+                  <div>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">API Key</n-text>
+                    <n-input
+                      :value="maskApiKey(config.localApiKey)"
+                      readonly
+                      size="large"
+                    >
+                      <template #suffix>
+                        <n-button text @click="copyToClipboard(config.localApiKey)">
+                          <template #icon>
+                            <n-icon><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                    </n-input>
+                  </div>
+                </n-space>
+              </n-grid-item>
+
+              <!-- 右侧: 翻译 API 接口 -->
+              <n-grid-item>
+                <n-space vertical :size="12">
+                  <n-text strong style="font-size: 14px;">翻译 API 接口</n-text>
+                  <n-text depth="3" style="font-size: 12px;">用于将 OpenAI SDK 格式转换为对应格式</n-text>
+
+                  <div>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Claude API</n-text>
+                    <n-input
+                      :value="config.localApiEndpoint.replace('/api', '') + '/api/v1/anthropic'"
+                      readonly
+                      size="large"
+                    >
+                      <template #suffix>
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint.replace('/api', '') + '/api/v1/anthropic')">
+                          <template #icon>
+                            <n-icon><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                    </n-input>
+                  </div>
+
+                  <div>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Gemini API</n-text>
+                    <n-input
+                      :value="config.localApiEndpoint.replace('/api', '') + '/api/v1/gemini'"
+                      readonly
+                      size="large"
+                    >
+                      <template #suffix>
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint.replace('/api', '') + '/api/v1/gemini')">
+                          <template #icon>
+                            <n-icon><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                    </n-input>
+                  </div>
+                </n-space>
+              </n-grid-item>
+            </n-grid>
+          </n-card>
+        </div>
+
+        <!-- Models Page -->
+        <div v-if="currentPage === 'models'">
+          <n-card title="📋 模型路由列表（按分组显示）" :bordered="false">
+            <template #header-extra>
+              <n-space>
+                <n-button @click="exportRoutes" type="primary" ghost>
+                  <template #icon>
+                    <n-icon><ArrowForwardIcon style="transform: rotate(-90deg);" /></n-icon>
+                  </template>
+                  导出 JSON
+                </n-button>
+                <n-button @click="triggerImport" type="primary" ghost>
+                  <template #icon>
+                    <n-icon><ArrowForwardIcon style="transform: rotate(90deg);" /></n-icon>
+                  </template>
+                  导入 JSON
+                </n-button>
+                <n-button @click="loadRoutes" quaternary circle>
+                  <template #icon>
+                    <n-icon><RefreshIcon /></n-icon>
+                  </template>
+                </n-button>
+              </n-space>
+              <input
+                ref="fileInput"
+                type="file"
+                accept=".json"
+                style="display: none;"
+                @change="handleFileImport"
+              />
+            </template>
+
+            <!-- 按分组显示的折叠面板 -->
+            <n-collapse v-model:expanded-names="expandedGroups">
+              <n-collapse-item
+                v-for="(groupRoutes, groupName) in groupedRoutes"
+                :key="groupName"
+                :name="groupName"
+                :title="`分组: ${groupName || '未分组'} (${groupRoutes.length} 个模型)`"
+              >
+                <n-data-table
+                  :columns="modelsPageColumns"
+                  :data="groupRoutes"
+                  :bordered="false"
+                  :single-line="false"
+                  size="small"
+                  striped
+                  :pagination="false"
+                />
+              </n-collapse-item>
+            </n-collapse>
+
+            <n-empty
+              v-if="routes.length === 0"
+              description="暂无路由数据"
+              style="margin: 60px 0;"
+            />
+          </n-card>
+        </div>
+
+        <!-- Stats Page -->
+        <div v-if="currentPage === 'stats'">
+          <n-space vertical :size="16">
+            <!-- 今日消耗统计卡片 -->
+            <n-card title="📊 今日消耗统计" :bordered="false">
+              <n-grid :cols="4" :x-gap="16">
+                <n-grid-item>
+                  <n-statistic label="今日 Token 消耗" :value="formatNumber(stats.today_tokens || 0)">
+                    <template #prefix>
+                      <n-icon size="20" color="#18a058">
+                        <FlashIcon />
+                      </n-icon>
+                    </template>
+                  </n-statistic>
+                </n-grid-item>
+                <n-grid-item>
+                  <n-statistic label="今日请求数" :value="stats.today_requests || 0">
+                    <template #prefix>
+                      <n-icon size="20" color="#18a058">
+                        <StatsChartIcon />
+                      </n-icon>
+                    </template>
+                  </n-statistic>
+                </n-grid-item>
+                <n-grid-item>
+                  <n-statistic label="总 Token 消耗" :value="formatNumber(stats.total_tokens)">
+                    <template #prefix>
+                      <n-icon size="20" color="#18a058">
+                        <FlashIcon />
+                      </n-icon>
+                    </template>
+                  </n-statistic>
+                </n-grid-item>
+                <n-grid-item>
+                  <n-statistic label="总请求数" :value="stats.total_requests">
+                    <template #prefix>
+                      <n-icon size="20" color="#18a058">
+                        <StatsChartIcon />
+                      </n-icon>
+                    </template>
+                  </n-statistic>
+                </n-grid-item>
+              </n-grid>
+            </n-card>
+
+            <!-- GitHub 热力图样式的历史使用量 -->
+            <n-card title="🔥 历史 Token 使用热力图" :bordered="false">
+              <div class="heatmap-container">
+                <div class="heatmap-months">
+                  <span v-for="month in heatmapMonths" :key="month">{{ month }}</span>
+                </div>
+                <div class="heatmap-grid">
+                  <div v-for="(week, weekIndex) in heatmapData" :key="weekIndex" class="heatmap-week">
+                    <div
+                      v-for="(day, dayIndex) in week"
+                      :key="dayIndex"
+                      class="heatmap-cell"
+                      :class="getHeatmapClass(day.value)"
+                      :title="`${day.date}: ${formatNumber(day.value)} tokens`"
+                    >
+                    </div>
+                  </div>
+                </div>
+                <div class="heatmap-legend">
+                  <span>少</span>
+                  <div class="legend-box level-0"></div>
+                  <div class="legend-box level-1"></div>
+                  <div class="legend-box level-2"></div>
+                  <div class="legend-box level-3"></div>
+                  <div class="legend-box level-4"></div>
+                  <span>多</span>
+                </div>
+              </div>
+            </n-card>
+
+            <!-- 今日按时间段显示的折线图 -->
+            <n-card title="📈 今日 Token 使用趋势" :bordered="false">
+              <v-chart :option="todayChartOption" style="height: 300px;" :theme="isDark ? 'dark' : ''" autoresize />
+            </n-card>
+
+            <!-- 历史使用量 - 接口使用排行 -->
+            <n-card title="🏆 接口使用排行（历史）" :bordered="false">
+              <n-data-table
+                :columns="rankingColumns"
+                :data="modelRankingData"
+                :pagination="false"
+                :bordered="false"
+                striped
+              />
+            </n-card>
+          </n-space>
+        </div>
+
+        <!-- Settings Page -->
+        <div v-if="currentPage === 'settings'">
+          <n-card title="⚙️ 应用设置" :bordered="false">
+            <n-space vertical :size="24">
+              <!-- GitHub 项目信息 -->
+              <div>
+                <n-text strong style="font-size: 16px;">项目信息</n-text>
+                <n-space vertical :size="12" style="margin-top: 12px;">
+                  <n-space align="center">
+                    <n-icon size="20"><LogoGithubIcon /></n-icon>
+                    <n-text>GitHub 仓库:</n-text>
+                    <n-button text type="primary" tag="a" href="https://github.com/yourusername/openai-router-go" target="_blank">
+                      github.com/yourusername/openai-router-go
+                    </n-button>
+                  </n-space>
+
+                  <n-space align="center">
+                    <n-icon size="20"><InformationCircleIcon /></n-icon>
+                    <n-text>版本: v1.0.0</n-text>
+                  </n-space>
+
+                  <n-space align="center">
+                    <n-icon size="20"><CodeIcon /></n-icon>
+                    <n-text>基于 Wails + Vue 3 + Naive UI 构建</n-text>
+                  </n-space>
+                </n-space>
+              </div>
+
+              <n-divider />
+
+              <!-- 应用选项 -->
+              <div>
+                <n-text strong style="font-size: 16px;">应用选项</n-text>
+                <n-space vertical :size="16" style="margin-top: 12px;">
+                  <!-- 重定向关键字设置 -->
+                  <div>
+                    <n-text depth="2" style="font-size: 14px; margin-bottom: 8px; display: block;">重定向关键字</n-text>
+                    <n-input
+                      v-model:value="settings.redirectKeyword"
+                      placeholder="proxy_auto"
+                      style="max-width: 300px;"
+                    >
+                      <template #suffix>
+                        <n-button text size="small" @click="updateRedirectKeyword">
+                          保存
+                        </n-button>
+                      </template>
+                    </n-input>
+                    <n-text depth="3" style="font-size: 12px; margin-top: 4px; display: block;">
+                      修改此关键字用于触发代理重定向功能,默认为 "proxy_auto"
+                    </n-text>
+                  </div>
+
+                  <n-checkbox v-model:checked="settings.autoStart">
+                    开机自启动（功能开发中）
+                  </n-checkbox>
+
+                  <n-checkbox v-model:checked="settings.minimizeToTray">
+                    关闭时最小化到托盘（功能开发中）
+                  </n-checkbox>
+
+                  <n-button type="primary" @click="saveSettings" :disabled="true">
+                    保存设置（功能开发中）
+                  </n-button>
+                </n-space>
+              </div>
+
+              <n-divider />
+
+              <!-- 主题设置 -->
+              <div>
+                <n-text strong style="font-size: 16px;">主题设置</n-text>
+                <n-space align="center" style="margin-top: 12px;">
+                  <n-text>当前主题:</n-text>
+                  <n-tag :type="isDark ? 'info' : 'warning'">
+                    {{ isDark ? '暗黑模式' : '明亮模式' }}
+                  </n-tag>
+                  <n-button @click="toggleTheme">
+                    <template #icon>
+                      <n-icon>
+                        <MoonIcon v-if="!isDark" />
+                        <SunnyIcon v-else />
+                      </n-icon>
+                    </template>
+                    切换主题
+                  </n-button>
+                </n-space>
+              </div>
+            </n-space>
+          </n-card>
+        </div>
+      </n-layout-content>
+    </n-layout>
+
+    <!-- Add/Edit Modal -->
+    <n-modal
+      v-model:show="showAddModal"
+      preset="card"
+      :title="editingRoute ? '编辑路由' : '添加路由'"
+      style="width: 600px;"
+      :mask-closable="false"
+    >
+      <n-form
+        ref="formRef"
+        :model="formModel"
+        :rules="formRules"
+        label-placement="left"
+        label-width="100px"
+      >
+        <n-form-item label="路由名称" path="name">
+          <n-input v-model:value="formModel.name" placeholder="例如: OpenAI Official" />
+        </n-form-item>
+
+        <n-form-item label="模型 ID" path="model">
+          <n-space style="width: 100%;">
+            <n-input
+              v-model:value="formModel.model"
+              placeholder="例如: gpt-4"
+              style="flex: 1;"
+            />
+            <n-button @click="fetchModels" :loading="fetchingModels">
+              获取模型
+            </n-button>
+          </n-space>
+        </n-form-item>
+
+        <n-form-item label="API URL" path="apiUrl">
+          <n-input
+            v-model:value="formModel.apiUrl"
+            placeholder="https://api.openai.com/v1"
+            @blur="cleanApiUrl"
+          />
+          <template #feedback>
+            <span style="color: #888; font-size: 12px;">💡 提示：API URL 一般不要在末尾加斜杠 (/)</span>
+          </template>
+        </n-form-item>
+
+        <n-form-item label="API Key" path="apiKey">
+          <n-input v-model:value="formModel.apiKey" type="password" placeholder="留空则透传原始请求的 Key" show-password-on="click" />
+        </n-form-item>
+
+        <n-form-item label="分组" path="group">
+          <n-input v-model:value="formModel.group" placeholder="例如: production" />
+        </n-form-item>
+      </n-form>
+
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="showAddModal = false">取消</n-button>
+          <n-button type="primary" @click="handleSubmit" :loading="submitting">
+            {{ editingRoute ? '更新' : '添加' }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
+    <!-- Model Select Modal -->
+    <n-modal
+      v-model:show="showModelSelectModal"
+      preset="card"
+      title="🎯 选择模型"
+      style="width: 800px; max-height: 600px;"
+    >
+      <n-input
+        v-model:value="modelSearchKeyword"
+        placeholder="🔍 搜索模型名称..."
+        clearable
+        style="margin-bottom: 16px;"
+      />
+      <n-scrollbar style="max-height: 450px;">
+        <n-grid :x-gap="12" :y-gap="12" :cols="2">
+          <n-grid-item
+            v-for="model in filteredModels"
+            :key="model"
+          >
+            <n-card
+              :title="model"
+              hoverable
+              @click="selectModel(model)"
+              style="cursor: pointer; transition: all 0.3s;"
+              :class="{'selected-model-card': formModel.model === model}"
+            >
+              <template #header>
+                <n-ellipsis style="max-width: 100%;" :tooltip="{ width: 300 }">
+                  <n-text strong>{{ model }}</n-text>
+                </n-ellipsis>
+              </template>
+              <n-space vertical size="small">
+                <n-tag :type="getModelTagType(model)" size="small">
+                  {{ getModelProvider(model) }}
+                </n-tag>
+                <n-text depth="3" style="font-size: 12px;">
+                  点击选择此模型
+                </n-text>
+              </n-space>
+            </n-card>
+          </n-grid-item>
+        </n-grid>
+        <n-empty
+          v-if="filteredModels.length === 0"
+          description="未找到匹配的模型"
+          style="margin: 60px 0;"
+        />
+      </n-scrollbar>
+      <template #footer>
+        <n-space justify="space-between" align="center">
+          <n-text depth="3">共 {{ fetchedModels.length }} 个模型</n-text>
+          <n-button @click="showModelSelectModal = false">关闭</n-button>
+        </n-space>
+      </template>
+    </n-modal>
+  </n-config-provider>
+</template>
+
+<script setup>
+import { ref, h, onMounted, computed } from 'vue'
+import { darkTheme, NButton, NIcon, NTag, NSpace } from 'naive-ui'
+import VChart from 'vue-echarts'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { LineChart } from 'echarts/charts'
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+} from 'echarts/components'
+import {
+  ServerOutline as ServerIcon,
+  Moon as MoonIcon,
+  Sunny as SunnyIcon,
+  Add as AddIcon,
+  GitNetwork as GitNetworkIcon,
+  Cube as CubeIcon,
+  StatsChart as StatsChartIcon,
+  Flash as FlashIcon,
+  ArrowForward as ArrowForwardIcon,
+  Copy as CopyIcon,
+  Refresh as RefreshIcon,
+  CreateOutline as EditIcon,
+  TrashOutline as DeleteIcon,
+  Home as HomeIcon,
+  List as ListIcon,
+  BarChart as BarChartIcon,
+  Settings as SettingsIcon,
+  Location as LocationIcon,
+  LogoGithub as LogoGithubIcon,
+  InformationCircle as InformationCircleIcon,
+  Code as CodeIcon,
+  Link as LinkIcon,
+} from '@vicons/ionicons5'
+
+// 注册 ECharts 组件
+use([
+  CanvasRenderer,
+  LineChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+])
+
+// 使用全局 API（不需要 provider）
+const showMessage = (type, content) => {
+  if (window.$message) {
+    window.$message[type](content)
+  } else {
+    console.log(`[${type}] ${content}`)
+  }
+}
+
+// Page State
+const currentPage = ref('home') // 'home' | 'models' | 'stats' | 'settings'
+const refreshing = ref(false)
+
+// Theme
+const isDark = ref(true)
+const themeOverrides = {
+  common: {
+    primaryColor: '#18A058',
+  },
+}
+
+const toggleTheme = () => {
+  isDark.value = !isDark.value
+  showMessage("info", isDark.value ? '已切换到暗黑模式' : '已切换到明亮模式')
+}
+
+// 刷新所有数据
+const refreshAll = async () => {
+  refreshing.value = true
+  try {
+    await Promise.all([
+      loadRoutes(),
+      loadStats(),
+      loadConfig(),
+      loadDailyStats(),
+      loadHourlyStats(),
+      loadModelRanking()
+    ])
+    showMessage("success", '数据已刷新')
+  } catch (error) {
+    showMessage("error", '刷新失败: ' + error)
+  } finally {
+    refreshing.value = false
+  }
+}
+
+// Settings
+const settings = ref({
+  redirectKeyword: 'proxy_auto',
+  autoStart: false,
+  minimizeToTray: false,
+})
+
+const updateRedirectKeyword = async () => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await window.go.main.App.UpdateConfig(
+      redirectConfig.value.enabled,
+      settings.value.redirectKeyword,
+      redirectConfig.value.targetModel
+    )
+    redirectConfig.value.keyword = settings.value.redirectKeyword
+    showMessage("success", '重定向关键字已更新')
+    await loadConfig()
+  } catch (error) {
+    showMessage("error", '更新失败: ' + error)
+  }
+}
+
+const saveSettings = () => {
+  showMessage("info", '设置保存功能开发中')
+}
+
+// Stats
+const stats = ref({
+  route_count: 0,
+  model_count: 0,
+  total_requests: 0,
+  total_tokens: 0,
+  today_tokens: 0, // 今日token使用量
+  today_requests: 0, // 今日请求数
+  success_rate: 0,
+})
+
+// 热力图数据
+const heatmapData = ref([])
+
+// 生成热力图数据结构（填充空白日期）
+const generateHeatmapData = (dailyStats) => {
+  const weeks = []
+  const today = new Date()
+  const statsMap = {}
+
+  // 将统计数据转换为map
+  if (dailyStats && Array.isArray(dailyStats)) {
+    dailyStats.forEach(stat => {
+      statsMap[stat.date] = stat.total_tokens || 0
+    })
+  }
+
+  // 生成52周的数据
+  for (let i = 51; i >= 0; i--) {
+    const week = []
+    for (let j = 0; j < 7; j++) {
+      const date = new Date(today)
+      date.setDate(date.getDate() - (i * 7 + (6 - j)))
+      const dateStr = date.toISOString().split('T')[0]
+      week.push({
+        date: dateStr,
+        value: statsMap[dateStr] || 0
+      })
+    }
+    weeks.push(week)
+  }
+  return weeks
+}
+const heatmapMonths = ref(['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'])
+
+const getHeatmapClass = (value) => {
+  if (value === 0) return 'level-0'
+  if (value < 2000) return 'level-1'
+  if (value < 4000) return 'level-2'
+  if (value < 6000) return 'level-3'
+  return 'level-4'
+}
+
+// 今日按小时统计数据
+const hourlyStatsData = ref([])
+
+// 今日折线图配置
+const todayChartOption = computed(() => {
+  // 生成24小时的数据（填充空白小时）
+  const hourlyMap = {}
+  hourlyStatsData.value.forEach(stat => {
+    hourlyMap[stat.hour] = stat.total_tokens || 0
+  })
+
+  const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
+  const data = Array.from({ length: 24 }, (_, i) => hourlyMap[i] || 0)
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      formatter: '{b}<br/>Token: {c}'
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: hours
+    },
+    yAxis: {
+      type: 'value',
+      name: 'Tokens'
+    },
+    series: [{
+      name: 'Token使用量',
+      type: 'line',
+      smooth: true,
+      data: data,
+      areaStyle: {
+        color: isDark.value ? 'rgba(24, 160, 88, 0.1)' : 'rgba(24, 160, 88, 0.2)'
+      },
+      lineStyle: {
+        color: '#18a058'
+      },
+      itemStyle: {
+        color: '#18a058'
+      }
+    }]
+  }
+})
+
+// 接口使用排行数据
+const modelRankingData = ref([])
+
+const rankingColumns = [
+  { title: '排名', key: 'rank', width: 80 },
+  {
+    title: '模型',
+    key: 'model',
+    render(row) {
+      return h(NTag, { type: 'info' }, { default: () => row.model })
+    }
+  },
+  { title: '请求次数', key: 'requests' },
+  {
+    title: 'Token消耗',
+    key: 'total_tokens',
+    render(row) {
+      return formatNumber(row.total_tokens || 0)
+    }
+  },
+  {
+    title: '成功率',
+    key: 'success_rate',
+    render(row) {
+      return `${row.success_rate || 0}%`
+    }
+  },
+]
+
+// Config
+const config = ref({
+  localApiKey: '',
+  localApiEndpoint: '',
+})
+
+// Redirect Config
+const redirectConfig = ref({
+  enabled: false,
+  keyword: 'proxy_auto',
+  targetModel: '',
+  targetName: '',
+})
+
+// Routes
+const routes = ref([])
+const showAddModal = ref(false)
+const editingRoute = ref(null)
+const submitting = ref(false)
+const expandedGroups = ref([]) // 控制折叠面板展开状态
+const fileInput = ref(null) // 文件输入引用
+
+// Form
+const formRef = ref(null)
+const formModel = ref({
+  name: '',
+  model: '',
+  apiUrl: '',
+  apiKey: '',
+  group: '',
+})
+
+const formRules = {
+  name: { required: true, message: '请输入路由名称' },
+  model: { required: true, message: '请输入模型 ID' },
+  apiUrl: { required: true, message: '请输入 API URL' },
+}
+
+// Model Fetch
+const fetchingModels = ref(false)
+const showModelSelectModal = ref(false)
+const fetchedModels = ref([])
+const modelSearchKeyword = ref('')
+
+// Computed: filtered models based on search
+const filteredModels = computed(() => {
+  if (!modelSearchKeyword.value) {
+    return fetchedModels.value
+  }
+  const keyword = modelSearchKeyword.value.toLowerCase()
+  return fetchedModels.value.filter(model =>
+    model.toLowerCase().includes(keyword)
+  )
+})
+
+// Computed: 按分组组织路由
+const groupedRoutes = computed(() => {
+  const groups = {}
+  routes.value.forEach(route => {
+    const groupName = route.group || '未分组'
+    if (!groups[groupName]) {
+      groups[groupName] = []
+    }
+    groups[groupName].push(route)
+  })
+  return groups
+})
+
+// Pagination
+const pagination = {
+  pageSize: 10,
+}
+
+// 设置为重定向按钮处理
+const setAsRedirect = async (model) => {
+  redirectConfig.value.targetModel = model
+  redirectConfig.value.enabled = true
+  await saveRedirectConfig()
+  showMessage("success", `已设置 ${model} 为重定向目标`)
+}
+
+// 跳转到目标模型
+const jumpToTargetModel = () => {
+  currentPage.value = 'models'
+  // 展开所有分组
+  expandedGroups.value = Object.keys(groupedRoutes.value)
+}
+
+// Table columns for home page
+const columns = [
+  {
+    title: 'ID',
+    key: 'id',
+    width: 60,
+  },
+  {
+    title: '名称',
+    key: 'name',
+    width: 150,
+  },
+  {
+    title: '模型',
+    key: 'model',
+    width: 180,
+    render(row) {
+      return h(NTag, { type: 'info' }, { default: () => row.model })
+    },
+  },
+  {
+    title: 'API URL',
+    key: 'api_url',
+    ellipsis: {
+      tooltip: true,
+    },
+  },
+  {
+    title: 'API Key',
+    key: 'api_key',
+    width: 150,
+    render(row) {
+      return maskApiKey(row.api_key)
+    },
+  },
+  {
+    title: '分组',
+    key: 'group',
+    width: 100,
+    render(row) {
+      return row.group ? h(NTag, { type: 'success', size: 'small' }, { default: () => row.group }) : '-'
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 150,
+    render(row) {
+      return h(NSpace, {}, {
+        default: () => [
+          h(
+            NButton,
+            {
+              size: 'small',
+              onClick: () => handleEdit(row),
+            },
+            { default: () => '编辑', icon: () => h(NIcon, {}, { default: () => h(EditIcon) }) }
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'error',
+              onClick: () => handleDelete(row),
+            },
+            { default: () => '删除', icon: () => h(NIcon, {}, { default: () => h(DeleteIcon) }) }
+          ),
+        ]
+      })
+    },
+  },
+]
+
+// Table columns for models page (with redirect button)
+const modelsPageColumns = [
+  {
+    title: 'ID',
+    key: 'id',
+    width: 60,
+  },
+  {
+    title: '名称',
+    key: 'name',
+    width: 150,
+  },
+  {
+    title: '模型',
+    key: 'model',
+    width: 200,
+    render(row) {
+      return h(NSpace, { align: 'center' }, {
+        default: () => [
+          h(NTag, { type: 'info' }, { default: () => row.model }),
+          // 如果是当前重定向目标，显示标记
+          redirectConfig.value.targetModel === row.model
+            ? h(NTag, { type: 'success', size: 'small' }, { default: () => '重定向目标' })
+            : null
+        ]
+      })
+    },
+  },
+  {
+    title: 'API URL',
+    key: 'api_url',
+    ellipsis: {
+      tooltip: true,
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 280,
+    render(row) {
+      return h(NSpace, {}, {
+        default: () => [
+          h(
+            NButton,
+            {
+              size: 'small',
+              onClick: () => handleEdit(row),
+            },
+            { default: () => '编辑', icon: () => h(NIcon, {}, { default: () => h(EditIcon) }) }
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'error',
+              onClick: () => handleDelete(row),
+            },
+            { default: () => '删除', icon: () => h(NIcon, {}, { default: () => h(DeleteIcon) }) }
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'primary',
+              onClick: () => setAsRedirect(row.model),
+            },
+            { default: () => '设为重定向', icon: () => h(NIcon, {}, { default: () => h(LinkIcon) }) }
+          ),
+        ]
+      })
+    },
+  },
+]
+
+// Computed
+const modelOptions = computed(() => {
+  const models = routes.value.map(r => r.model)
+  const uniqueModels = [...new Set(models)]
+  return uniqueModels.map(m => ({ label: m, value: m }))
+})
+
+// Methods
+const loadRoutes = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      console.error('Wails runtime not available')
+      return
+    }
+    const data = await window.go.main.App.GetRoutes()
+    routes.value = data || []
+    console.log('Routes loaded:', routes.value.length)
+  } catch (error) {
+    console.error('Failed to load routes:', error)
+    showMessage("error", '加载路由失败: ' + error)
+  }
+}
+
+const loadStats = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      console.error('Wails runtime not available')
+      return
+    }
+    const data = await window.go.main.App.GetStats()
+    stats.value = data || stats.value
+    console.log('Stats loaded:', stats.value)
+  } catch (error) {
+    console.error('加载统计失败:', error)
+  }
+}
+
+// 加载每日统计（用于热力图）
+const loadDailyStats = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      return
+    }
+    const data = await window.go.main.App.GetDailyStats(365) // 获取365天数据
+    heatmapData.value = generateHeatmapData(data || [])
+  } catch (error) {
+    console.error('加载每日统计失败:', error)
+  }
+}
+
+// 加载今日按小时统计（用于折线图）
+const loadHourlyStats = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      return
+    }
+    const data = await window.go.main.App.GetHourlyStats()
+    hourlyStatsData.value = data || []
+  } catch (error) {
+    console.error('加载按小时统计失败:', error)
+  }
+}
+
+// 加载模型使用排行
+const loadModelRanking = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      return
+    }
+    const data = await window.go.main.App.GetModelRanking(10) // 获取前10名
+    modelRankingData.value = data || []
+  } catch (error) {
+    console.error('加载模型排行失败:', error)
+  }
+}
+
+const loadConfig = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      console.error('Wails runtime not available')
+      return
+    }
+    const data = await window.go.main.App.GetConfig()
+    config.value = data || config.value
+    redirectConfig.value.enabled = data.redirectEnabled || false
+    redirectConfig.value.keyword = data.redirectKeyword || 'proxy_auto'
+    redirectConfig.value.targetModel = data.redirectTargetModel || ''
+    redirectConfig.value.targetName = data.redirectTargetName || ''
+    settings.value.redirectKeyword = data.redirectKeyword || 'proxy_auto' // 同步到设置
+    console.log('Config loaded:', config.value)
+  } catch (error) {
+    console.error('加载配置失败:', error)
+  }
+}
+
+const saveRedirectConfig = async () => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await window.go.main.App.UpdateConfig(
+      redirectConfig.value.enabled,
+      redirectConfig.value.keyword,
+      redirectConfig.value.targetModel
+    )
+    showMessage("success", '配置已保存')
+    // 重新加载配置以获取最新的 targetName
+    await loadConfig()
+  } catch (error) {
+    showMessage("error", '保存配置失败: ' + error)
+  }
+}
+
+// 清理 API URL，移除末尾斜杠
+const cleanApiUrl = () => {
+  if (formModel.value.apiUrl) {
+    const cleaned = formModel.value.apiUrl.trim().replace(/\/+$/, '')
+    if (cleaned !== formModel.value.apiUrl) {
+      formModel.value.apiUrl = cleaned
+      showMessage("info", 'API URL 已自动移除末尾斜杠')
+    }
+  }
+}
+
+const handleSubmit = async () => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await formRef.value?.validate()
+    submitting.value = true
+
+    // 清理 API URL（移除末尾斜杠）
+    const cleanedApiUrl = formModel.value.apiUrl.trim().replace(/\/+$/, '')
+
+    if (editingRoute.value) {
+      await window.go.main.App.UpdateRoute(
+        editingRoute.value.id,
+        formModel.value.name,
+        formModel.value.model,
+        cleanedApiUrl,
+        formModel.value.apiKey,
+        formModel.value.group
+      )
+      showMessage("success", '路由已更新')
+    } else {
+      await window.go.main.App.AddRoute(
+        formModel.value.name,
+        formModel.value.model,
+        cleanedApiUrl,
+        formModel.value.apiKey,
+        formModel.value.group
+      )
+      showMessage("success", '路由已添加')
+    }
+
+    showAddModal.value = false
+    editingRoute.value = null
+    formModel.value = {
+      name: '',
+      model: '',
+      apiUrl: '',
+      apiKey: '',
+      group: '',
+    }
+    loadRoutes()
+    loadStats()
+  } catch (error) {
+    if (error.errors) {
+      // 表单验证错误
+      return
+    }
+    showMessage("error", '操作失败: ' + error)
+  } finally {
+    submitting.value = false
+  }
+}
+
+const handleEdit = (row) => {
+  editingRoute.value = row
+  formModel.value = {
+    name: row.name,
+    model: row.model,
+    apiUrl: row.api_url,
+    apiKey: row.api_key,
+    group: row.group,
+  }
+  showAddModal.value = true
+}
+
+const handleDelete = async (row) => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await window.go.main.App.DeleteRoute(row.id)
+    showMessage("success", '路由已删除')
+    loadRoutes()
+    loadStats()
+  } catch (error) {
+    showMessage("error", '删除失败: ' + error)
+  }
+}
+
+const fetchModels = async () => {
+  if (!formModel.value.apiUrl) {
+    showMessage("warning", '请先输入 API URL')
+    return
+  }
+
+  // 检查 Wails 运行时
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪，请使用编译后的 exe 或 wails dev')
+    return
+  }
+
+  fetchingModels.value = true
+  try {
+    const models = await window.go.main.App.FetchRemoteModels(
+      formModel.value.apiUrl,
+      formModel.value.apiKey || ''
+    )
+    fetchedModels.value = models
+    showModelSelectModal.value = true
+  } catch (error) {
+    showMessage("error", '获取模型列表失败: ' + error)
+  } finally {
+    fetchingModels.value = false
+  }
+}
+
+const selectModel = (model) => {
+  formModel.value.model = model
+  showModelSelectModal.value = false
+  modelSearchKeyword.value = '' // 清空搜索
+  showMessage("success", '已选择模型: ' + model)
+}
+
+// 根据模型名称识别提供商
+const getModelProvider = (model) => {
+  const lowerModel = model.toLowerCase()
+  if (lowerModel.includes('gpt') || lowerModel.includes('openai')) return 'OpenAI'
+  if (lowerModel.includes('claude')) return 'Anthropic'
+  if (lowerModel.includes('gemini')) return 'Google'
+  if (lowerModel.includes('deepseek')) return 'DeepSeek'
+  if (lowerModel.includes('glm') || lowerModel.includes('chatglm')) return '智谱AI'
+  if (lowerModel.includes('qwen') || lowerModel.includes('通义')) return '阿里云'
+  if (lowerModel.includes('ernie') || lowerModel.includes('文心')) return '百度'
+  if (lowerModel.includes('spark') || lowerModel.includes('讯飞')) return '讯飞'
+  if (lowerModel.includes('llama')) return 'Meta'
+  if (lowerModel.includes('mistral')) return 'Mistral'
+  return '其他'
+}
+
+// 根据提供商返回标签颜色
+const getModelTagType = (model) => {
+  const provider = getModelProvider(model)
+  const typeMap = {
+    'OpenAI': 'success',
+    'Anthropic': 'info',
+    'Google': 'warning',
+    'DeepSeek': 'error',
+    '智谱AI': 'primary',
+    '阿里云': 'default',
+    '百度': 'info',
+    '讯飞': 'success',
+    'Meta': 'warning',
+    'Mistral': 'error'
+  }
+  return typeMap[provider] || 'default'
+}
+
+const maskApiKey = (key) => {
+  if (!key || key.length <= 10) return key
+  return key.substring(0, 5) + '***' + key.substring(key.length - 5)
+}
+
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    showMessage("success", '已复制到剪贴板')
+  } catch (error) {
+    showMessage("error", '复制失败')
+  }
+}
+
+const formatNumber = (num) => {
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(1) + 'M'
+  }
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1) + 'K'
+  }
+  return num.toString()
+}
+
+// 导出路由为 JSON
+const exportRoutes = () => {
+  try {
+    const exportData = routes.value.map(route => ({
+      name: route.name,
+      model: route.model,
+      api_url: route.api_url,
+      api_key: route.api_key,
+      group: route.group,
+    }))
+
+    const jsonStr = JSON.stringify(exportData, null, 2)
+    const blob = new Blob([jsonStr], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `openai-router-routes-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    showMessage("success", `已导出 ${exportData.length} 个路由`)
+  } catch (error) {
+    showMessage("error", '导出失败: ' + error)
+  }
+}
+
+// 触发文件选择
+const triggerImport = () => {
+  fileInput.value?.click()
+}
+
+// 处理文件导入
+const handleFileImport = async (event) => {
+  const file = event.target.files?.[0]
+  if (!file) return
+
+  try {
+    const text = await file.text()
+    const importData = JSON.parse(text)
+
+    if (!Array.isArray(importData)) {
+      showMessage("error", 'JSON 格式错误：应为路由数组')
+      return
+    }
+
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      showMessage("error", 'Wails 运行时未就绪')
+      return
+    }
+
+    let successCount = 0
+    let failCount = 0
+
+    for (const route of importData) {
+      try {
+        await window.go.main.App.AddRoute(
+          route.name || '',
+          route.model || '',
+          route.api_url || '',
+          route.api_key || '',
+          route.group || ''
+        )
+        successCount++
+      } catch (error) {
+        console.error('导入路由失败:', route, error)
+        failCount++
+      }
+    }
+
+    showMessage("success", `导入完成：成功 ${successCount} 个，失败 ${failCount} 个`)
+    loadRoutes()
+    loadStats()
+  } catch (error) {
+    showMessage("error", '导入失败: ' + error)
+  } finally {
+    // 清空文件输入
+    if (fileInput.value) {
+      fileInput.value.value = ''
+    }
+  }
+}
+
+// Lifecycle
+onMounted(async () => {
+  // Wait for Wails runtime to be ready
+  if (!window.go) {
+    console.log('Waiting for Wails runtime...')
+    await new Promise((resolve) => {
+      const checkRuntime = setInterval(() => {
+        if (window.go) {
+          clearInterval(checkRuntime)
+          resolve()
+        }
+      }, 100)
+    })
+  }
+
+  console.log('Wails runtime ready, loading data...')
+  loadRoutes()
+  loadStats()
+  loadConfig()
+  loadDailyStats()
+  loadHourlyStats()
+  loadModelRanking()
+
+  // 每 30 秒刷新一次统计
+  setInterval(() => {
+    loadStats()
+    loadHourlyStats()
+  }, 30000)
+
+  // 每 5 分钟刷新一次热力图和排行
+  setInterval(() => {
+    loadDailyStats()
+    loadModelRanking()
+  }, 300000)
+})
+</script>
+
+<style scoped>
+:deep(.n-card__content) {
+  padding: 16px;
+}
+
+:deep(.n-statistic) {
+  color: white;
+}
+
+:deep(.n-statistic .n-statistic__label) {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+}
+
+:deep(.n-statistic .n-statistic__value) {
+  color: white;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.selected-model-card {
+  border: 2px solid #18a058 !important;
+  box-shadow: 0 0 10px rgba(24, 160, 88, 0.3) !important;
+}
+
+.selected-model-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(24, 160, 88, 0.4) !important;
+}
+
+/* GitHub 热力图样式 */
+.heatmap-container {
+  padding: 20px;
+}
+
+.heatmap-months {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #888;
+}
+
+.heatmap-grid {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.heatmap-week {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.heatmap-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.5);
+  border: 1px solid #fff;
+  z-index: 10;
+}
+
+.heatmap-cell.level-0 {
+  background-color: #ebedf0;
+}
+
+.heatmap-cell.level-1 {
+  background-color: #9be9a8;
+}
+
+.heatmap-cell.level-2 {
+  background-color: #40c463;
+}
+
+.heatmap-cell.level-3 {
+  background-color: #30a14e;
+}
+
+.heatmap-cell.level-4 {
+  background-color: #216e39;
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #888;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.legend-box {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+}
+
+.legend-box.level-0 {
+  background-color: #ebedf0;
+}
+
+.legend-box.level-1 {
+  background-color: #9be9a8;
+}
+
+.legend-box.level-2 {
+  background-color: #40c463;
+}
+
+.legend-box.level-3 {
+  background-color: #30a14e;
+}
+
+.legend-box.level-4 {
+  background-color: #216e39;
+}
+</style>
