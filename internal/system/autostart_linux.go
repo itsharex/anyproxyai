@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package system
@@ -13,16 +14,16 @@ import (
 const (
 	desktopTemplate = `[Desktop Entry]
 Type=Application
-Name=OpenAI Router
-Comment=OpenAI API Router and Proxy
+Name=AnyProxyAi
+Comment=AnyProxyAi - API 代理管理器
 Exec=%s
-Icon=openai-router
+Icon=anyproxyai
 Terminal=false
 Categories=Utility;Network;
 StartupNotify=false
 X-GNOME-Autostart-enabled=true
 `
-	appName = "openai-router.desktop"
+	appName = "anyproxyai.desktop"
 )
 
 type AutoStart struct{}

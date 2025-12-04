@@ -25,3 +25,13 @@ func (a *DeepSeekAdapter) AdaptResponse(response map[string]interface{}) (map[st
 func (a *DeepSeekAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[string]interface{}, error) {
 	return chunk, nil
 }
+
+func (a *DeepSeekAdapter) AdaptStreamStart(model string) []map[string]interface{} {
+	// DeepSeek 适配器不需要转换开始事件
+	return nil
+}
+
+func (a *DeepSeekAdapter) AdaptStreamEnd() []map[string]interface{} {
+	// DeepSeek 适配器不需要转换结束事件
+	return nil
+}

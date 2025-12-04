@@ -3,6 +3,7 @@ package service
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"openai-router-go/internal/database"
@@ -20,7 +21,7 @@ func NewRouteService(db *sql.DB) *RouteService {
 
 // GetAllRoutes 获取所有路由
 func (s *RouteService) GetAllRoutes() ([]database.ModelRoute, error) {
-	query := `SELECT id, name, model, api_url, api_key, "group", enabled, created_at, updated_at
+	query := `SELECT id, name, model, api_url, api_key, "group", COALESCE(format, 'openai'), enabled, created_at, updated_at
 	          FROM model_routes ORDER BY created_at DESC`
 
 	rows, err := s.db.Query(query)
@@ -33,7 +34,7 @@ func (s *RouteService) GetAllRoutes() ([]database.ModelRoute, error) {
 	for rows.Next() {
 		var route database.ModelRoute
 		err := rows.Scan(&route.ID, &route.Name, &route.Model, &route.APIUrl, &route.APIKey,
-			&route.Group, &route.Enabled, &route.CreatedAt, &route.UpdatedAt)
+			&route.Group, &route.Format, &route.Enabled, &route.CreatedAt, &route.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -45,12 +46,12 @@ func (s *RouteService) GetAllRoutes() ([]database.ModelRoute, error) {
 
 // GetRouteByModel 根据模型名获取路由(支持负载均衡)
 func (s *RouteService) GetRouteByModel(model string) (*database.ModelRoute, error) {
-	query := `SELECT id, name, model, api_url, api_key, "group", enabled, created_at, updated_at
+	query := `SELECT id, name, model, api_url, api_key, "group", COALESCE(format, 'openai'), enabled, created_at, updated_at
 	          FROM model_routes WHERE model = ? AND enabled = 1 ORDER BY RANDOM() LIMIT 1`
 
 	var route database.ModelRoute
 	err := s.db.QueryRow(query, model).Scan(&route.ID, &route.Name, &route.Model, &route.APIUrl,
-		&route.APIKey, &route.Group, &route.Enabled, &route.CreatedAt, &route.UpdatedAt)
+		&route.APIKey, &route.Group, &route.Format, &route.Enabled, &route.CreatedAt, &route.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("model not found: %s", model)
@@ -63,27 +64,27 @@ func (s *RouteService) GetRouteByModel(model string) (*database.ModelRoute, erro
 }
 
 // AddRoute 添加路由
-func (s *RouteService) AddRoute(name, model, apiUrl, apiKey, group string) error {
-	query := `INSERT INTO model_routes (name, model, api_url, api_key, "group", enabled, created_at, updated_at)
-	          VALUES (?, ?, ?, ?, ?, 1, ?, ?)`
+func (s *RouteService) AddRoute(name, model, apiUrl, apiKey, group, format string) error {
+	query := `INSERT INTO model_routes (name, model, api_url, api_key, "group", format, enabled, created_at, updated_at)
+	          VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
 
 	now := time.Now()
-	_, err := s.db.Exec(query, name, model, apiUrl, apiKey, group, now, now)
+	_, err := s.db.Exec(query, name, model, apiUrl, apiKey, group, format, now, now)
 	if err != nil {
 		log.Errorf("Failed to add route: %v", err)
 		return err
 	}
 
-	log.Infof("Route added: %s -> %s (%s)", model, apiUrl, name)
+	log.Infof("Route added: %s -> %s (%s) [%s]", model, apiUrl, name, format)
 	return nil
 }
 
 // UpdateRoute 更新路由
-func (s *RouteService) UpdateRoute(id int64, name, model, apiUrl, apiKey, group string) error {
-	query := `UPDATE model_routes SET name = ?, model = ?, api_url = ?, api_key = ?, "group" = ?, updated_at = ?
+func (s *RouteService) UpdateRoute(id int64, name, model, apiUrl, apiKey, group, format string) error {
+	query := `UPDATE model_routes SET name = ?, model = ?, api_url = ?, api_key = ?, "group" = ?, format = ?, updated_at = ?
 	          WHERE id = ?`
 
-	result, err := s.db.Exec(query, name, model, apiUrl, apiKey, group, time.Now(), id)
+	result, err := s.db.Exec(query, name, model, apiUrl, apiKey, group, format, time.Now(), id)
 	if err != nil {
 		log.Errorf("Failed to update route: %v", err)
 		return err
@@ -98,10 +99,17 @@ func (s *RouteService) UpdateRoute(id int64, name, model, apiUrl, apiKey, group 
 	return nil
 }
 
-// DeleteRoute 删除路由
+// DeleteRoute 删除路由及其相关的请求日志
 func (s *RouteService) DeleteRoute(id int64) error {
-	query := `DELETE FROM model_routes WHERE id = ?`
+	// 先删除该路由相关的请求日志
+	_, err := s.db.Exec(`DELETE FROM request_logs WHERE route_id = ?`, id)
+	if err != nil {
+		log.Errorf("Failed to delete route logs: %v", err)
+		return err
+	}
 
+	// 再删除路由
+	query := `DELETE FROM model_routes WHERE id = ?`
 	result, err := s.db.Exec(query, id)
 	if err != nil {
 		log.Errorf("Failed to delete route: %v", err)
@@ -113,7 +121,7 @@ func (s *RouteService) DeleteRoute(id int64) error {
 		return fmt.Errorf("route not found: id=%d", id)
 	}
 
-	log.Infof("Route deleted: id=%d", id)
+	log.Infof("Route deleted: id=%d (with related logs)", id)
 	return nil
 }
 
@@ -134,7 +142,6 @@ func (s *RouteService) ToggleRoute(id int64, enabled bool) error {
 // GetStats 获取统计信息
 func (s *RouteService) GetStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
-	today := time.Now().Format("2006-01-02")
 
 	// 路由总数
 	var routeCount int
@@ -168,17 +175,23 @@ func (s *RouteService) GetStats() (map[string]interface{}, error) {
 	}
 	stats["total_tokens"] = totalTokens
 
-	// 今日请求数
+	// 今日请求数 - 直接比较日期字符串
 	var todayRequests int
-	err = s.db.QueryRow("SELECT COUNT(*) FROM request_logs WHERE DATE(created_at) = ?", today).Scan(&todayRequests)
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM request_logs 
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
+	`).Scan(&todayRequests)
 	if err != nil {
 		return nil, err
 	}
 	stats["today_requests"] = todayRequests
 
-	// 今日Token消耗
+	// 今日Token消耗 - 直接比较日期字符串
 	var todayTokens int
-	err = s.db.QueryRow("SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs WHERE DATE(created_at) = ?", today).Scan(&todayTokens)
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs 
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
+	`).Scan(&todayTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -197,19 +210,28 @@ func (s *RouteService) GetStats() (map[string]interface{}, error) {
 	}
 	stats["success_rate"] = successRate
 
+	log.Infof("Stats loaded: today_requests=%d, today_tokens=%d, total_requests=%d, total_tokens=%d",
+		todayRequests, todayTokens, totalRequests, totalTokens)
+
 	return stats, nil
 }
 
 // LogRequest 记录请求日志
 func (s *RouteService) LogRequest(model string, routeID int64, requestTokens, responseTokens, totalTokens int, success bool, errorMsg string) error {
+	// 使用 SQLite 的 datetime('now', 'localtime') 确保时区一致
 	query := `INSERT INTO request_logs (model, route_id, request_tokens, response_tokens, total_tokens, success, error_message, created_at)
-	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	          VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))`
 
-	_, err := s.db.Exec(query, model, routeID, requestTokens, responseTokens, totalTokens, success, errorMsg, time.Now())
+	_, err := s.db.Exec(query, model, routeID, requestTokens, responseTokens, totalTokens, success, errorMsg)
+	if err != nil {
+		log.Errorf("LogRequest error: %v", err)
+	} else {
+		log.Infof("LogRequest: model=%s, tokens=%d, success=%v", model, totalTokens, success)
+	}
 	return err
 }
 
-// GetAvailableModels 获取所有可用的模型列表
+// GetAvailableModels 获取所有可用的模型列表（包含重定向关键字）
 func (s *RouteService) GetAvailableModels() ([]string, error) {
 	query := `SELECT DISTINCT model FROM model_routes WHERE enabled = 1 ORDER BY model`
 
@@ -231,14 +253,44 @@ func (s *RouteService) GetAvailableModels() ([]string, error) {
 	return models, nil
 }
 
+// GetAvailableModelsWithRedirect 获取所有可用的模型列表（包含重定向关键字）
+func (s *RouteService) GetAvailableModelsWithRedirect(redirectKeyword string) ([]string, error) {
+	query := `SELECT DISTINCT model FROM model_routes WHERE enabled = 1 ORDER BY model`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var models []string
+
+	// 首先添加重定向关键字（如果配置了）
+	if redirectKeyword != "" {
+		models = append(models, redirectKeyword)
+	}
+
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return nil, err
+		}
+		models = append(models, model)
+	}
+
+	return models, nil
+}
+
 // GetTodayStats 获取今日统计
 func (s *RouteService) GetTodayStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
-	today := time.Now().Format("2006-01-02")
 
 	// 今日请求数
 	var todayRequests int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE DATE(created_at) = ?`, today).Scan(&todayRequests)
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM request_logs 
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
+	`).Scan(&todayRequests)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +298,10 @@ func (s *RouteService) GetTodayStats() (map[string]interface{}, error) {
 
 	// 今日Token消耗
 	var todayTokens int
-	err = s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs WHERE DATE(created_at) = ?`, today).Scan(&todayTokens)
+	err = s.db.QueryRow(`
+		SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs 
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
+	`).Scan(&todayTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -259,19 +314,20 @@ func (s *RouteService) GetTodayStats() (map[string]interface{}, error) {
 func (s *RouteService) GetDailyStats(days int) ([]map[string]interface{}, error) {
 	query := `
 		SELECT
-			DATE(created_at) as date,
+			substr(created_at, 1, 10) as date,
 			COUNT(*) as requests,
 			COALESCE(SUM(request_tokens), 0) as request_tokens,
 			COALESCE(SUM(response_tokens), 0) as response_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens
 		FROM request_logs
-		WHERE created_at >= DATE('now', ?)
-		GROUP BY DATE(created_at)
+		WHERE substr(created_at, 1, 10) >= date('now', 'localtime', ?)
+		GROUP BY substr(created_at, 1, 10)
 		ORDER BY date
 	`
 
 	rows, err := s.db.Query(query, fmt.Sprintf("-%d days", days))
 	if err != nil {
+		log.Errorf("GetDailyStats query error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -282,6 +338,7 @@ func (s *RouteService) GetDailyStats(days int) ([]map[string]interface{}, error)
 		var requests, requestTokens, responseTokens, totalTokens int
 		err := rows.Scan(&date, &requests, &requestTokens, &responseTokens, &totalTokens)
 		if err != nil {
+			log.Errorf("GetDailyStats scan error: %v", err)
 			return nil, err
 		}
 
@@ -294,25 +351,26 @@ func (s *RouteService) GetDailyStats(days int) ([]map[string]interface{}, error)
 		})
 	}
 
+	log.Infof("GetDailyStats: loaded %d days of data", len(stats))
 	return stats, nil
 }
 
 // GetHourlyStats 获取今日按小时统计
 func (s *RouteService) GetHourlyStats() ([]map[string]interface{}, error) {
-	today := time.Now().Format("2006-01-02")
 	query := `
 		SELECT
-			CAST(strftime('%H', created_at) AS INTEGER) as hour,
+			CAST(substr(created_at, 12, 2) AS INTEGER) as hour,
 			COUNT(*) as requests,
 			COALESCE(SUM(total_tokens), 0) as total_tokens
 		FROM request_logs
-		WHERE DATE(created_at) = ?
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
 		GROUP BY hour
 		ORDER BY hour
 	`
 
-	rows, err := s.db.Query(query, today)
+	rows, err := s.db.Query(query)
 	if err != nil {
+		log.Errorf("GetHourlyStats query error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -322,6 +380,7 @@ func (s *RouteService) GetHourlyStats() ([]map[string]interface{}, error) {
 		var hour, requests, totalTokens int
 		err := rows.Scan(&hour, &requests, &totalTokens)
 		if err != nil {
+			log.Errorf("GetHourlyStats scan error: %v", err)
 			return nil, err
 		}
 
@@ -332,10 +391,232 @@ func (s *RouteService) GetHourlyStats() ([]map[string]interface{}, error) {
 		})
 	}
 
+	log.Infof("GetHourlyStats: loaded %d hours of data", len(stats))
 	return stats, nil
 }
 
-// GetModelRanking 获取模型使用排行
+// ImportRouteFromFormat 从不同格式导入路由
+func (s *RouteService) ImportRouteFromFormat(name, model, apiUrl, apiKey, group, targetFormat string) (string, error) {
+	// 根据目标格式自动转换 API URL 和模型名
+	convertedUrl, convertedModel, err := s.convertRouteFormat(apiUrl, model, targetFormat)
+	if err != nil {
+		return "", fmt.Errorf("格式转换失败: %v", err)
+	}
+
+	// 添加转换后的路由
+	err = s.AddRoute(name+" ("+targetFormat+")", convertedModel, convertedUrl, apiKey, group, targetFormat)
+	if err != nil {
+		return "", fmt.Errorf("添加路由失败: %v", err)
+	}
+
+	log.Infof("Route imported and converted: %s [%s] -> %s:%s", name, model, convertedUrl, convertedModel)
+	return targetFormat, nil
+}
+
+// convertRouteFormat 转换路由格式
+func (s *RouteService) convertRouteFormat(apiUrl, model, targetFormat string) (string, string, error) {
+	switch targetFormat {
+	case "openai":
+		return s.convertToOpenAI(apiUrl, model)
+	case "claude":
+		return s.convertToClaude(apiUrl, model)
+	case "gemini":
+		return s.convertToGemini(apiUrl, model)
+	default:
+		return apiUrl, model, nil
+	}
+}
+
+// convertToOpenAI 转换为 OpenAI 格式
+func (s *RouteService) convertToOpenAI(apiUrl, model string) (string, string, error) {
+	// 如果已经是 OpenAI 格式，直接返回
+	if isOpenAIFormat(apiUrl, model) {
+		return apiUrl, model, nil
+	}
+
+	// Claude 到 OpenAI
+	if isClaudeFormat(apiUrl, model) {
+		return "https://api.openai.com/v1", convertClaudeModelToOpenAI(model), nil
+	}
+
+	// Gemini 到 OpenAI
+	if isGeminiFormat(apiUrl, model) {
+		return "https://api.openai.com/v1", convertGeminiModelToOpenAI(model), nil
+	}
+
+	// 默认转换为 OpenAI 兼容格式
+	return "https://api.openai.com/v1", "gpt-3.5-turbo", nil
+}
+
+// convertToClaude 转换为 Claude 格式
+func (s *RouteService) convertToClaude(apiUrl, model string) (string, string, error) {
+	// 如果已经是 Claude 格式，直接返回
+	if isClaudeFormat(apiUrl, model) {
+		return apiUrl, model, nil
+	}
+
+	// OpenAI 到 Claude
+	if isOpenAIFormat(apiUrl, model) {
+		return "https://api.anthropic.com/v1", convertOpenAIModelToClaude(model), nil
+	}
+
+	// Gemini 到 Claude
+	if isGeminiFormat(apiUrl, model) {
+		return "https://api.anthropic.com/v1", convertGeminiModelToClaude(model), nil
+	}
+
+	// 默认转换为 Claude 兼容格式
+	return "https://api.anthropic.com/v1", "claude-3-sonnet-20240229", nil
+}
+
+// convertToGemini 转换为 Gemini 格式
+func (s *RouteService) convertToGemini(apiUrl, model string) (string, string, error) {
+	// 如果已经是 Gemini 格式，直接返回
+	if isGeminiFormat(apiUrl, model) {
+		return apiUrl, model, nil
+	}
+
+	// OpenAI 到 Gemini
+	if isOpenAIFormat(apiUrl, model) {
+		return "https://generativelanguage.googleapis.com/v1", convertOpenAIModelToGemini(model), nil
+	}
+
+	// Claude 到 Gemini
+	if isClaudeFormat(apiUrl, model) {
+		return "https://generativelanguage.googleapis.com/v1", convertClaudeModelToGemini(model), nil
+	}
+
+	// 默认转换为 Gemini 兼容格式
+	return "https://generativelanguage.googleapis.com/v1", "gemini-pro", nil
+}
+
+// 格式检测函数
+func isOpenAIFormat(apiUrl, model string) bool {
+	return strings.Contains(apiUrl, "api.openai.com") ||
+		strings.HasPrefix(model, "gpt-") ||
+		strings.HasPrefix(model, "o1-")
+}
+
+func isClaudeFormat(apiUrl, model string) bool {
+	return strings.Contains(apiUrl, "api.anthropic.com") ||
+		strings.HasPrefix(model, "claude-")
+}
+
+func isGeminiFormat(apiUrl, model string) bool {
+	return strings.Contains(apiUrl, "generativelanguage.googleapis.com") ||
+		strings.HasPrefix(model, "gemini-")
+}
+
+// 模型名转换函数
+func convertClaudeModelToOpenAI(model string) string {
+	modelMap := map[string]string{
+		"claude-3-opus-20240229":     "gpt-4-turbo",
+		"claude-3-sonnet-20240229":   "gpt-4",
+		"claude-3-haiku-20240307":    "gpt-3.5-turbo",
+		"claude-3-5-sonnet-20241022": "gpt-4-turbo",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "gpt-4" // 默认映射
+}
+
+func convertOpenAIModelToClaude(model string) string {
+	modelMap := map[string]string{
+		"gpt-4-turbo":   "claude-3-5-sonnet-20241022",
+		"gpt-4":         "claude-3-sonnet-20240229",
+		"gpt-3.5-turbo": "claude-3-haiku-20240307",
+		"o1-preview":    "claude-3-opus-20240229",
+		"o1-mini":       "claude-3-sonnet-20240229",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "claude-3-sonnet-20240229" // 默认映射
+}
+
+func convertGeminiModelToOpenAI(model string) string {
+	modelMap := map[string]string{
+		"gemini-1.5-pro":    "gpt-4-turbo",
+		"gemini-1.5-flash":  "gpt-3.5-turbo",
+		"gemini-1.0-pro":    "gpt-4",
+		"gemini-pro-vision": "gpt-4-vision-preview",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "gpt-4" // 默认映射
+}
+
+func convertOpenAIModelToGemini(model string) string {
+	modelMap := map[string]string{
+		"gpt-4-turbo":          "gemini-1.5-pro",
+		"gpt-4":                "gemini-1.0-pro",
+		"gpt-3.5-turbo":        "gemini-1.5-flash",
+		"gpt-4-vision-preview": "gemini-pro-vision",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "gemini-1.5-pro" // 默认映射
+}
+
+func convertGeminiModelToClaude(model string) string {
+	modelMap := map[string]string{
+		"gemini-1.5-pro":   "claude-3-5-sonnet-20241022",
+		"gemini-1.5-flash": "claude-3-haiku-20240307",
+		"gemini-1.0-pro":   "claude-3-sonnet-20240229",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "claude-3-sonnet-20240229" // 默认映射
+}
+
+func convertClaudeModelToGemini(model string) string {
+	modelMap := map[string]string{
+		"claude-3-opus-20240229":     "gemini-1.5-pro",
+		"claude-3-sonnet-20240229":   "gemini-1.0-pro",
+		"claude-3-haiku-20240307":    "gemini-1.5-flash",
+		"claude-3-5-sonnet-20241022": "gemini-1.5-pro",
+	}
+	if mapped, exists := modelMap[model]; exists {
+		return mapped
+	}
+	return "gemini-1.5-pro" // 默认映射
+}
+
+// ClearStats 清除统计数据
+func (s *RouteService) ClearStats() error {
+	query := "DELETE FROM request_logs"
+	_, err := s.db.Exec(query)
+	if err != nil {
+		log.Errorf("Failed to clear stats: %v", err)
+		return err
+	}
+	log.Info("All statistics data cleared")
+	return nil
+}
+
+// IsRedirectModel 判断是否为重定向模型（排除在排行榜之外）
+func (s *RouteService) IsRedirectModel(model string) bool {
+	// 常见的重定向/代理模型标识
+	redirectPatterns := []string{
+		"proxy_auto",
+		"proxy_",
+		"redirect_",
+		"forward_",
+	}
+
+	for _, pattern := range redirectPatterns {
+		if strings.Contains(strings.ToLower(model), pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetModelRanking 获取模型使用排行（排除重定向模型）
 func (s *RouteService) GetModelRanking(limit int) ([]map[string]interface{}, error) {
 	query := `
 		SELECT
@@ -348,10 +629,9 @@ func (s *RouteService) GetModelRanking(limit int) ([]map[string]interface{}, err
 		FROM request_logs
 		GROUP BY model
 		ORDER BY total_tokens DESC
-		LIMIT ?
 	`
 
-	rows, err := s.db.Query(query, limit)
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +648,14 @@ func (s *RouteService) GetModelRanking(limit int) ([]map[string]interface{}, err
 			return nil, err
 		}
 
+		// 跳过重定向模型
+		if strings.Contains(strings.ToLower(model), "proxy_auto") ||
+			strings.Contains(strings.ToLower(model), "proxy_") ||
+			strings.Contains(strings.ToLower(model), "redirect_") ||
+			strings.Contains(strings.ToLower(model), "forward_") {
+			continue
+		}
+
 		ranking = append(ranking, map[string]interface{}{
 			"rank":            rank,
 			"model":           model,
@@ -378,6 +666,11 @@ func (s *RouteService) GetModelRanking(limit int) ([]map[string]interface{}, err
 			"success_rate":    successRate,
 		})
 		rank++
+
+		// 如果达到限制数量，停止添加
+		if rank > limit {
+			break
+		}
 	}
 
 	return ranking, nil

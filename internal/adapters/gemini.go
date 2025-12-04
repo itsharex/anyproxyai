@@ -258,3 +258,13 @@ func (a *GeminiAdapter) convertFinishReason(finishReason string) string {
 		return "stop"
 	}
 }
+
+func (a *GeminiAdapter) AdaptStreamStart(model string) []map[string]interface{} {
+	// Gemini 适配器不需要转换开始事件
+	return nil
+}
+
+func (a *GeminiAdapter) AdaptStreamEnd() []map[string]interface{} {
+	// Gemini 适配器不需要转换结束事件
+	return nil
+}

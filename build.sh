@@ -1,137 +1,74 @@
 #!/bin/bash
 
 echo "========================================"
-echo "  OpenAI Router - Cross Platform Build"
+echo "  AnyProxyAi - Build Script"
 echo "========================================"
-echo ""
 
-# Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-# Check Go installation
-if ! command -v go &> /dev/null; then
-    echo -e "${RED}[ERROR]${NC} Go is not installed or not in PATH"
-    echo "Please install Go from https://golang.org/dl/"
-    exit 1
-fi
+CURRENT_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+[[ "$CURRENT_OS" == darwin* ]] && CURRENT_OS="darwin"
+[[ "$CURRENT_OS" == linux* ]] && CURRENT_OS="linux"
 
-# Check Node.js installation
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}[ERROR]${NC} Node.js is not installed or not in PATH"
-    echo "Please install Node.js from https://nodejs.org/"
-    exit 1
-fi
+echo -e "${BLUE}Current OS:${NC} $CURRENT_OS"
 
-# Check Wails installation
-if ! command -v wails &> /dev/null; then
-    echo -e "${YELLOW}[WARN]${NC} Wails is not installed"
-    echo "Installing Wails CLI..."
+# Check dependencies
+command -v go &>/dev/null || { echo "Go not found"; exit 1; }
+command -v node &>/dev/null || { echo "Node.js not found"; exit 1; }
+command -v wails &>/dev/null || {
+    echo "Installing Wails..."
     go install github.com/wailsapp/wails/v2/cmd/wails@latest
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}[ERROR]${NC} Failed to install Wails"
-        exit 1
-    fi
-fi
+    export PATH=$PATH:$(go env GOPATH)/bin
+}
 
-echo "[1/5] Installing frontend dependencies..."
-cd frontend
-npm install
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} Failed to install frontend dependencies"
-    exit 1
-fi
-cd ..
-
-echo ""
-echo "[2/5] Building frontend..."
-cd frontend
-npm run build
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} Failed to build frontend"
-    exit 1
-fi
-cd ..
-
-echo ""
-echo "[3/5] Downloading Go dependencies..."
-go mod tidy
-go mod download
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} Failed to download Go dependencies"
-    exit 1
-fi
-
-echo ""
-echo "[4/5] Building Wails desktop application..."
-wails build
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} Failed to build Wails application"
-    exit 1
-fi
-
-echo ""
-echo "[5/5] Building cross-platform binaries..."
-
-# Create build directory
+# Clean
+echo -e "${BLUE}[0/4]${NC} Cleaning..."
+rm -f build/bin/anyproxyai-${CURRENT_OS}-*
 mkdir -p build/bin
 
-# Windows
-echo "Building for Windows (amd64)..."
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o build/bin/openai-router-windows-amd64.exe .
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK]${NC} Windows amd64 build complete"
-else
-    echo -e "${YELLOW}[WARN]${NC} Failed to build for Windows amd64"
+echo -e "${BLUE}[1/4]${NC} Frontend dependencies..."
+cd frontend && npm install && cd ..
+
+echo -e "${BLUE}[2/4]${NC} Building frontend..."
+cd frontend && npm run build && cd ..
+
+echo -e "${BLUE}[3/4]${NC} Go dependencies..."
+go mod tidy && go mod download
+
+echo -e "${BLUE}[4/4]${NC} Building for $CURRENT_OS..."
+
+if [ "$CURRENT_OS" == "linux" ]; then
+    # Install Linux dependencies if needed
+    if ! dpkg -l | grep -q libgtk-3-dev; then
+        echo "Installing GTK dependencies..."
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+    fi
+    
+    wails build -platform linux/amd64 -o anyproxyai-linux-amd64 && \
+        echo -e "${GREEN}[OK]${NC} Linux amd64"
+    wails build -platform linux/arm64 -o anyproxyai-linux-arm64 && \
+        echo -e "${GREEN}[OK]${NC} Linux arm64"
+        
+elif [ "$CURRENT_OS" == "darwin" ]; then
+    wails build -platform darwin/amd64 -o anyproxyai-darwin-amd64 && \
+        echo -e "${GREEN}[OK]${NC} macOS amd64"
+    wails build -platform darwin/arm64 -o anyproxyai-darwin-arm64 && \
+        echo -e "${GREEN}[OK]${NC} macOS arm64"
 fi
 
-# Linux
-echo "Building for Linux (amd64)..."
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o build/bin/openai-router-linux-amd64 .
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK]${NC} Linux amd64 build complete"
-else
-    echo -e "${YELLOW}[WARN]${NC} Failed to build for Linux amd64"
-fi
-
-# macOS (Intel)
-echo "Building for macOS (amd64)..."
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o build/bin/openai-router-darwin-amd64 .
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK]${NC} macOS amd64 build complete"
-else
-    echo -e "${YELLOW}[WARN]${NC} Failed to build for macOS amd64"
-fi
-
-# macOS (Apple Silicon)
-echo "Building for macOS (arm64)..."
-GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o build/bin/openai-router-darwin-arm64 .
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK]${NC} macOS arm64 build complete"
-else
-    echo -e "${YELLOW}[WARN]${NC} Failed to build for macOS arm64"
-fi
-
-# Make binaries executable
-chmod +x build/bin/openai-router-* 2>/dev/null
+chmod +x build/bin/anyproxyai-* 2>/dev/null
 
 echo ""
 echo "========================================"
 echo "  Build Complete!"
 echo "========================================"
+ls -la build/bin/anyproxyai-* 2>/dev/null
 echo ""
-echo "Desktop Application:"
-echo "  build/bin/OpenAI Router (Wails GUI)"
-echo ""
-echo "CLI Binaries:"
-echo "  build/bin/openai-router-windows-amd64.exe"
-echo "  build/bin/openai-router-linux-amd64"
-echo "  build/bin/openai-router-darwin-amd64"
-echo "  build/bin/openai-router-darwin-arm64"
-echo ""
-echo "To start the application:"
-echo "  Linux/macOS: ./start.sh"
-echo "  Windows: start.bat"
+echo "Notes:"
+echo "  - This script builds for current platform only"
+echo "  - For all platforms, use GitHub Actions"
+echo "  - See .github/workflows/build.yml"
 echo "========================================"

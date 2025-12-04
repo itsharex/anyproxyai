@@ -7,7 +7,7 @@
           <n-icon size="32" color="#18a058">
             <ServerIcon />
           </n-icon>
-          <span style="font-size: 20px; font-weight: 600;">OpenAI Router</span>
+          <span style="font-size: 20px; font-weight: 600;">AnyProxyAi</span>
         </div>
 
         <!-- Navigation Tabs -->
@@ -177,23 +177,26 @@
               <n-grid-item>
                 <n-space vertical :size="12">
                   <n-text strong style="font-size: 14px;">OpenAI 兼容接口</n-text>
-                  <n-text depth="3" style="font-size: 12px;">标准的 OpenAI API 格式接口</n-text>
+                  <n-text depth="3" style="font-size: 12px;">标准的 OpenAI API 格式接口（CherryStudio 等）</n-text>
 
                   <div>
                     <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">API 地址</n-text>
                     <n-input
-                      :value="config.localApiEndpoint"
+                      :value="config.localApiEndpoint + '/api'"
                       readonly
                       size="large"
                     >
                       <template #suffix>
-                        <n-button text @click="copyToClipboard(config.localApiEndpoint)">
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint + '/api')">
                           <template #icon>
                             <n-icon><CopyIcon /></n-icon>
                           </template>
                         </n-button>
                       </template>
                     </n-input>
+                    <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block; color: #18a058;">
+                      📝 OpenAI 兼容接口路径：{{ config.localApiEndpoint }}/api/v1/chat/completions
+                    </n-text>
                   </div>
 
                   <div>
@@ -209,6 +212,12 @@
                             <n-icon><CopyIcon /></n-icon>
                           </template>
                         </n-button>
+                        <n-button text @click="generateNewApiKey" style="margin-left: 8px;">
+                          <template #icon>
+                            <n-icon><RefreshIcon /></n-icon>
+                          </template>
+                          随机
+                        </n-button>
                       </template>
                     </n-input>
                   </div>
@@ -222,37 +231,63 @@
                   <n-text depth="3" style="font-size: 12px;">用于将 OpenAI SDK 格式转换为对应格式</n-text>
 
                   <div>
-                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Claude API</n-text>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Claude Code 专用接口</n-text>
                     <n-input
-                      :value="config.localApiEndpoint.replace('/api', '') + '/api/v1/anthropic'"
+                      :value="config.localApiEndpoint + '/api/claudecode'"
                       readonly
                       size="large"
                     >
                       <template #suffix>
-                        <n-button text @click="copyToClipboard(config.localApiEndpoint.replace('/api', '') + '/api/v1/anthropic')">
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint + '/api/claudecode')">
                           <template #icon>
                             <n-icon><CopyIcon /></n-icon>
                           </template>
                         </n-button>
                       </template>
                     </n-input>
+                    <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block; color: #18a058;">
+                      📝 Claude Code 接口路径：{{ config.localApiEndpoint }}/api/claudecode/v1/messages（拼接工具链）（支持流）
+                    </n-text>
+                  </div>
+
+                  <div>
+                    <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Anthropic API（CherryStudio等）</n-text>
+                    <n-input
+                      :value="config.localApiEndpoint + '/api/anthropic'"
+                      readonly
+                      size="large"
+                    >
+                      <template #suffix>
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint + '/api/anthropic')">
+                          <template #icon>
+                            <n-icon><CopyIcon /></n-icon>
+                          </template>
+                        </n-button>
+                      </template>
+                    </n-input>
+                    <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block; color: #18a058;">
+                      📝 Anthropic 接口路径：{{ config.localApiEndpoint }}/api/anthropic/v1/messages
+                    </n-text>
                   </div>
 
                   <div>
                     <n-text depth="2" style="font-size: 13px; margin-bottom: 4px; display: block;">Gemini API</n-text>
                     <n-input
-                      :value="config.localApiEndpoint.replace('/api', '') + '/api/v1/gemini'"
+                      :value="config.localApiEndpoint + '/api/gemini'"
                       readonly
                       size="large"
                     >
                       <template #suffix>
-                        <n-button text @click="copyToClipboard(config.localApiEndpoint.replace('/api', '') + '/api/v1/gemini')">
+                        <n-button text @click="copyToClipboard(config.localApiEndpoint + '/api/gemini')">
                           <template #icon>
                             <n-icon><CopyIcon /></n-icon>
                           </template>
                         </n-button>
                       </template>
                     </n-input>
+                    <n-text depth="3" style="font-size: 11px; margin-top: 4px; display: block; color: #18a058;">
+                      📝 Gemini 生成接口路径：{{ config.localApiEndpoint }}/api/gemini/completions
+                    </n-text>
                   </div>
                 </n-space>
               </n-grid-item>
@@ -308,6 +343,7 @@
                   size="small"
                   striped
                   :pagination="false"
+                  :row-props="rowProps"
                 />
               </n-collapse-item>
             </n-collapse>
@@ -325,6 +361,14 @@
           <n-space vertical :size="16">
             <!-- 今日消耗统计卡片 -->
             <n-card title="📊 今日消耗统计" :bordered="false">
+              <template #header-extra>
+                <n-button type="error" quaternary @click="showClearStatsDialog">
+                  <template #icon>
+                    <n-icon><TrashIcon /></n-icon>
+                  </template>
+                  清空数据
+                </n-button>
+              </template>
               <n-grid :cols="4" :x-gap="16">
                 <n-grid-item>
                   <n-statistic label="今日 Token 消耗" :value="formatNumber(stats.today_tokens || 0)">
@@ -367,9 +411,14 @@
 
             <!-- GitHub 热力图样式的历史使用量 -->
             <n-card title="🔥 历史 Token 使用热力图" :bordered="false">
-              <div class="heatmap-container">
-                <div class="heatmap-months">
-                  <span v-for="month in heatmapMonths" :key="month">{{ month }}</span>
+              <div class="heatmap-container" @mouseleave="heatmapTooltip.show = false">
+                <div class="heatmap-months-row">
+                  <span 
+                    v-for="monthData in heatmapMonthsWithPosition" 
+                    :key="monthData.weekIndex"
+                    class="heatmap-month-label"
+                    :style="{ left: (monthData.weekIndex * 14) + 'px' }"
+                  >{{ monthData.name }}</span>
                 </div>
                 <div class="heatmap-grid">
                   <div v-for="(week, weekIndex) in heatmapData" :key="weekIndex" class="heatmap-week">
@@ -377,11 +426,21 @@
                       v-for="(day, dayIndex) in week"
                       :key="dayIndex"
                       class="heatmap-cell"
-                      :class="getHeatmapClass(day.value)"
-                      :title="`${day.date}: ${formatNumber(day.value)} tokens`"
-                    >
-                    </div>
+                      :class="getHeatmapClass(day.tokens)"
+                      @mouseenter="showHeatmapTooltip($event, day)"
+                      @mouseleave="heatmapTooltip.show = false"
+                    ></div>
                   </div>
+                </div>
+                <!-- 单一 tooltip 元素 -->
+                <div 
+                  v-show="heatmapTooltip.show" 
+                  class="heatmap-tooltip"
+                  :style="{ left: heatmapTooltip.x + 'px', top: heatmapTooltip.y + 'px' }"
+                >
+                  <div style="font-weight: bold;">{{ heatmapTooltip.date }}</div>
+                  <div>Token: {{ formatNumber(heatmapTooltip.tokens) }}</div>
+                  <div>请求: {{ heatmapTooltip.requests }}</div>
                 </div>
                 <div class="heatmap-legend">
                   <span>少</span>
@@ -424,8 +483,8 @@
                   <n-space align="center">
                     <n-icon size="20"><LogoGithubIcon /></n-icon>
                     <n-text>GitHub 仓库:</n-text>
-                    <n-button text type="primary" tag="a" href="https://github.com/yourusername/openai-router-go" target="_blank">
-                      github.com/yourusername/openai-router-go
+                    <n-button text type="primary" tag="a" href="https://github.com/cniu6/anyproxyai" target="_blank">
+                      github.com/cniu6/anyproxyai
                     </n-button>
                   </n-space>
 
@@ -466,17 +525,13 @@
                     </n-text>
                   </div>
 
-                  <n-checkbox v-model:checked="settings.autoStart">
-                    开机自启动（功能开发中）
+                  <n-checkbox v-model:checked="settings.autoStart" @update:checked="toggleAutoStart">
+                    开机自启动
                   </n-checkbox>
 
-                  <n-checkbox v-model:checked="settings.minimizeToTray">
-                    关闭时最小化到托盘（功能开发中）
+                  <n-checkbox v-model:checked="settings.minimizeToTray" @update:checked="toggleMinimizeToTray">
+                    关闭时最小化到托盘
                   </n-checkbox>
-
-                  <n-button type="primary" @click="saveSettings" :disabled="true">
-                    保存设置（功能开发中）
-                  </n-button>
                 </n-space>
               </div>
 
@@ -507,129 +562,52 @@
       </n-layout-content>
     </n-layout>
 
-    <!-- Add/Edit Modal -->
+    <!-- Add Route Modal -->
+    <AddRouteModal 
+      v-model:visible="showAddModal" 
+      @route-added="handleRouteAdded" 
+    />
+    
+    <!-- Edit Route Modal -->
+    <EditRouteModal
+      v-model:visible="showEditModal"
+      :route="editingRoute"
+      @route-updated="handleRouteUpdated"
+    />
+
+    <!-- Clear Stats Confirmation Dialog -->
     <n-modal
-      v-model:show="showAddModal"
-      preset="card"
-      :title="editingRoute ? '编辑路由' : '添加路由'"
-      style="width: 600px;"
-      :mask-closable="false"
+      v-model:show="showClearDialog"
+      preset="dialog"
+      title="确认清空数据"
+      type="error"
+      positive-text="确认清空"
+      negative-text="取消"
+      @positive-click="confirmClearStats"
+      @negative-click="showClearDialog = false"
     >
-      <n-form
-        ref="formRef"
-        :model="formModel"
-        :rules="formRules"
-        label-placement="left"
-        label-width="100px"
-      >
-        <n-form-item label="路由名称" path="name">
-          <n-input v-model:value="formModel.name" placeholder="例如: OpenAI Official" />
-        </n-form-item>
-
-        <n-form-item label="模型 ID" path="model">
-          <n-space style="width: 100%;">
-            <n-input
-              v-model:value="formModel.model"
-              placeholder="例如: gpt-4"
-              style="flex: 1;"
-            />
-            <n-button @click="fetchModels" :loading="fetchingModels">
-              获取模型
-            </n-button>
-          </n-space>
-        </n-form-item>
-
-        <n-form-item label="API URL" path="apiUrl">
-          <n-input
-            v-model:value="formModel.apiUrl"
-            placeholder="https://api.openai.com/v1"
-            @blur="cleanApiUrl"
-          />
-          <template #feedback>
-            <span style="color: #888; font-size: 12px;">💡 提示：API URL 一般不要在末尾加斜杠 (/)</span>
-          </template>
-        </n-form-item>
-
-        <n-form-item label="API Key" path="apiKey">
-          <n-input v-model:value="formModel.apiKey" type="password" placeholder="留空则透传原始请求的 Key" show-password-on="click" />
-        </n-form-item>
-
-        <n-form-item label="分组" path="group">
-          <n-input v-model:value="formModel.group" placeholder="例如: production" />
-        </n-form-item>
-      </n-form>
-
-      <template #footer>
-        <n-space justify="end">
-          <n-button @click="showAddModal = false">取消</n-button>
-          <n-button type="primary" @click="handleSubmit" :loading="submitting">
-            {{ editingRoute ? '更新' : '添加' }}
-          </n-button>
-        </n-space>
+      <template #icon>
+        <n-icon size="24" color="#e88080">
+          <TrashIcon />
+        </n-icon>
       </template>
-    </n-modal>
-
-    <!-- Model Select Modal -->
-    <n-modal
-      v-model:show="showModelSelectModal"
-      preset="card"
-      title="🎯 选择模型"
-      style="width: 800px; max-height: 600px;"
-    >
-      <n-input
-        v-model:value="modelSearchKeyword"
-        placeholder="🔍 搜索模型名称..."
-        clearable
-        style="margin-bottom: 16px;"
-      />
-      <n-scrollbar style="max-height: 450px;">
-        <n-grid :x-gap="12" :y-gap="12" :cols="2">
-          <n-grid-item
-            v-for="model in filteredModels"
-            :key="model"
-          >
-            <n-card
-              :title="model"
-              hoverable
-              @click="selectModel(model)"
-              style="cursor: pointer; transition: all 0.3s;"
-              :class="{'selected-model-card': formModel.model === model}"
-            >
-              <template #header>
-                <n-ellipsis style="max-width: 100%;" :tooltip="{ width: 300 }">
-                  <n-text strong>{{ model }}</n-text>
-                </n-ellipsis>
-              </template>
-              <n-space vertical size="small">
-                <n-tag :type="getModelTagType(model)" size="small">
-                  {{ getModelProvider(model) }}
-                </n-tag>
-                <n-text depth="3" style="font-size: 12px;">
-                  点击选择此模型
-                </n-text>
-              </n-space>
-            </n-card>
-          </n-grid-item>
-        </n-grid>
-        <n-empty
-          v-if="filteredModels.length === 0"
-          description="未找到匹配的模型"
-          style="margin: 60px 0;"
-        />
-      </n-scrollbar>
-      <template #footer>
-        <n-space justify="space-between" align="center">
-          <n-text depth="3">共 {{ fetchedModels.length }} 个模型</n-text>
-          <n-button @click="showModelSelectModal = false">关闭</n-button>
-        </n-space>
-      </template>
+      确定要清空所有统计数据吗？此操作不可恢复！
+      <br>
+      <br>
+      <strong>将被清空的数据包括：</strong>
+      <ul>
+        <li>所有请求日志</li>
+        <li>Token 使用统计</li>
+        <li>模型使用排行</li>
+        <li>历史热力图数据</li>
+      </ul>
     </n-modal>
   </n-config-provider>
 </template>
 
 <script setup>
-import { ref, h, onMounted, computed } from 'vue'
-import { darkTheme, NButton, NIcon, NTag, NSpace } from 'naive-ui'
+import { ref, h, onMounted, computed, watch, nextTick } from 'vue'
+import { darkTheme, NButton, NIcon, NTag, NSpace, NModal, NTooltip } from 'naive-ui'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -662,7 +640,10 @@ import {
   InformationCircle as InformationCircleIcon,
   Code as CodeIcon,
   Link as LinkIcon,
+  Trash as TrashIcon,
 } from '@vicons/ionicons5'
+import AddRouteModal from './components/AddRouteModal.vue'
+import EditRouteModal from './components/EditRouteModal.vue'
 
 // 注册 ECharts 组件
 use([
@@ -749,6 +730,36 @@ const saveSettings = () => {
   showMessage("info", '设置保存功能开发中')
 }
 
+// 切换开机自启动
+const toggleAutoStart = async (enabled) => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await window.go.main.App.SetAutoStart(enabled)
+    showMessage("success", enabled ? '已启用开机自启动' : '已禁用开机自启动')
+  } catch (error) {
+    showMessage("error", '设置失败: ' + error)
+    settings.value.autoStart = !enabled // 恢复状态
+  }
+}
+
+// 切换最小化到托盘
+const toggleMinimizeToTray = async (enabled) => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+  try {
+    await window.go.main.App.SetMinimizeToTray(enabled)
+    showMessage("success", enabled ? '已启用关闭时最小化到托盘' : '已禁用关闭时最小化到托盘')
+  } catch (error) {
+    showMessage("error", '设置失败: ' + error)
+    settings.value.minimizeToTray = !enabled // 恢复状态
+  }
+}
+
 // Stats
 const stats = ref({
   route_count: 0,
@@ -763,42 +774,121 @@ const stats = ref({
 // 热力图数据
 const heatmapData = ref([])
 
+// 热力图 tooltip 状态
+const heatmapTooltip = ref({
+  show: false,
+  x: 0,
+  y: 0,
+  date: '',
+  tokens: 0,
+  requests: 0
+})
+
+// 显示热力图 tooltip
+const showHeatmapTooltip = (event, day) => {
+  const rect = event.target.getBoundingClientRect()
+  const container = event.target.closest('.heatmap-container')
+  const containerRect = container.getBoundingClientRect()
+  heatmapTooltip.value = {
+    show: true,
+    x: rect.left - containerRect.left + 15,
+    y: rect.top - containerRect.top - 60,
+    date: day.date,
+    tokens: day.tokens,
+    requests: day.requests
+  }
+}
+
 // 生成热力图数据结构（填充空白日期）
 const generateHeatmapData = (dailyStats) => {
   const weeks = []
   const today = new Date()
   const statsMap = {}
 
-  // 将统计数据转换为map
+  // 将统计数据转换为map（包含 tokens 和 requests）
   if (dailyStats && Array.isArray(dailyStats)) {
     dailyStats.forEach(stat => {
-      statsMap[stat.date] = stat.total_tokens || 0
+      statsMap[stat.date] = {
+        tokens: stat.total_tokens || 0,
+        requests: stat.requests || 0
+      }
     })
   }
 
-  // 生成52周的数据
-  for (let i = 51; i >= 0; i--) {
+  // 计算起始日期（52周前的周日）
+  const startDate = new Date(today)
+  startDate.setDate(startDate.getDate() - 363) // 回到约52周前
+  // 调整到周日
+  const dayOfWeek = startDate.getDay()
+  startDate.setDate(startDate.getDate() - dayOfWeek)
+
+  // 生成53周的数据（确保覆盖完整一年）
+  for (let i = 0; i < 53; i++) {
     const week = []
     for (let j = 0; j < 7; j++) {
-      const date = new Date(today)
-      date.setDate(date.getDate() - (i * 7 + (6 - j)))
-      const dateStr = date.toISOString().split('T')[0]
+      const date = new Date(startDate)
+      date.setDate(date.getDate() + (i * 7 + j))
+      // 使用本地日期格式
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const dateStr = `${year}-${month}-${day}`
+      const stat = statsMap[dateStr] || { tokens: 0, requests: 0 }
       week.push({
         date: dateStr,
-        value: statsMap[dateStr] || 0
+        tokens: stat.tokens,
+        requests: stat.requests
       })
     }
     weeks.push(week)
   }
   return weeks
 }
-const heatmapMonths = ref(['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'])
 
-const getHeatmapClass = (value) => {
-  if (value === 0) return 'level-0'
-  if (value < 2000) return 'level-1'
-  if (value < 4000) return 'level-2'
-  if (value < 6000) return 'level-3'
+// 动态计算月份标签（带位置信息）
+const heatmapMonthsWithPosition = computed(() => {
+  const monthsData = []
+  const today = new Date()
+  const startDate = new Date(today)
+  startDate.setDate(startDate.getDate() - 363)
+  // 调整到周日（与 generateHeatmapData 保持一致）
+  const dayOfWeek = startDate.getDay()
+  startDate.setDate(startDate.getDate() - dayOfWeek)
+  
+  const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+  let lastMonth = -1
+  
+  // 遍历所有天数来检测月份变化
+  for (let i = 0; i < 53; i++) {
+    // 检查这一周的每一天，找到月份变化的位置
+    for (let j = 0; j < 7; j++) {
+      const date = new Date(startDate)
+      date.setDate(date.getDate() + (i * 7 + j))
+      const month = date.getMonth()
+      if (month !== lastMonth) {
+        // 如果是这周的第一天（周日）就是新月份开始，标记在这周
+        // 否则标记在下一周
+        const weekIndex = j === 0 ? i : (i < 52 ? i + 1 : i)
+        // 避免重复添加同一个月
+        if (monthsData.length === 0 || monthsData[monthsData.length - 1].name !== monthNames[month]) {
+          monthsData.push({
+            name: monthNames[month],
+            weekIndex: j === 0 ? i : i
+          })
+        }
+        lastMonth = month
+        break // 找到这周的月份变化后跳出
+      }
+    }
+  }
+  return monthsData
+})
+
+const getHeatmapClass = (tokens) => {
+  if (!tokens || tokens === 0) return 'level-0'
+  if (tokens < 1000) return 'level-1'
+  if (tokens < 5000) return 'level-2'
+  if (tokens < 10000) return 'level-3'
   return 'level-4'
 }
 
@@ -808,18 +898,33 @@ const hourlyStatsData = ref([])
 // 今日折线图配置
 const todayChartOption = computed(() => {
   // 生成24小时的数据（填充空白小时）
-  const hourlyMap = {}
+  const hourlyTokensMap = {}
+  const hourlyRequestsMap = {}
   hourlyStatsData.value.forEach(stat => {
-    hourlyMap[stat.hour] = stat.total_tokens || 0
+    hourlyTokensMap[stat.hour] = stat.total_tokens || 0
+    hourlyRequestsMap[stat.hour] = stat.requests || 0
   })
 
   const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
-  const data = Array.from({ length: 24 }, (_, i) => hourlyMap[i] || 0)
+  const tokensData = Array.from({ length: 24 }, (_, i) => hourlyTokensMap[i] || 0)
+  const requestsData = Array.from({ length: 24 }, (_, i) => hourlyRequestsMap[i] || 0)
 
   return {
     tooltip: {
       trigger: 'axis',
-      formatter: '{b}<br/>Token: {c}'
+      formatter: function(params) {
+        let result = params[0].axisValue + '<br/>'
+        params.forEach(param => {
+          result += param.marker + param.seriesName + ': ' + param.value + '<br/>'
+        })
+        return result
+      }
+    },
+    legend: {
+      data: ['Token使用量', '请求数'],
+      textStyle: {
+        color: isDark.value ? '#fff' : '#333'
+      }
     },
     grid: {
       left: '3%',
@@ -832,25 +937,49 @@ const todayChartOption = computed(() => {
       boundaryGap: false,
       data: hours
     },
-    yAxis: {
-      type: 'value',
-      name: 'Tokens'
-    },
-    series: [{
-      name: 'Token使用量',
-      type: 'line',
-      smooth: true,
-      data: data,
-      areaStyle: {
-        color: isDark.value ? 'rgba(24, 160, 88, 0.1)' : 'rgba(24, 160, 88, 0.2)'
+    yAxis: [
+      {
+        type: 'value',
+        name: 'Tokens',
+        position: 'left'
       },
-      lineStyle: {
-        color: '#18a058'
-      },
-      itemStyle: {
-        color: '#18a058'
+      {
+        type: 'value',
+        name: '请求数',
+        position: 'right'
       }
-    }]
+    ],
+    series: [
+      {
+        name: 'Token使用量',
+        type: 'line',
+        smooth: true,
+        data: tokensData,
+        yAxisIndex: 0,
+        areaStyle: {
+          color: isDark.value ? 'rgba(24, 160, 88, 0.1)' : 'rgba(24, 160, 88, 0.2)'
+        },
+        lineStyle: {
+          color: '#18a058'
+        },
+        itemStyle: {
+          color: '#18a058'
+        }
+      },
+      {
+        name: '请求数',
+        type: 'line',
+        smooth: true,
+        data: requestsData,
+        yAxisIndex: 1,
+        lineStyle: {
+          color: '#f0a020'
+        },
+        itemStyle: {
+          color: '#f0a020'
+        }
+      }
+    ]
   }
 })
 
@@ -900,43 +1029,11 @@ const redirectConfig = ref({
 // Routes
 const routes = ref([])
 const showAddModal = ref(false)
+const showEditModal = ref(false)
 const editingRoute = ref(null)
-const submitting = ref(false)
 const expandedGroups = ref([]) // 控制折叠面板展开状态
 const fileInput = ref(null) // 文件输入引用
-
-// Form
-const formRef = ref(null)
-const formModel = ref({
-  name: '',
-  model: '',
-  apiUrl: '',
-  apiKey: '',
-  group: '',
-})
-
-const formRules = {
-  name: { required: true, message: '请输入路由名称' },
-  model: { required: true, message: '请输入模型 ID' },
-  apiUrl: { required: true, message: '请输入 API URL' },
-}
-
-// Model Fetch
-const fetchingModels = ref(false)
-const showModelSelectModal = ref(false)
-const fetchedModels = ref([])
-const modelSearchKeyword = ref('')
-
-// Computed: filtered models based on search
-const filteredModels = computed(() => {
-  if (!modelSearchKeyword.value) {
-    return fetchedModels.value
-  }
-  const keyword = modelSearchKeyword.value.toLowerCase()
-  return fetchedModels.value.filter(model =>
-    model.toLowerCase().includes(keyword)
-  )
-})
+const showClearDialog = ref(false) // 清除数据确认对话框
 
 // Computed: 按分组组织路由
 const groupedRoutes = computed(() => {
@@ -950,6 +1047,14 @@ const groupedRoutes = computed(() => {
   })
   return groups
 })
+
+
+// 行属性设置
+const rowProps = (row) => {
+  return {
+    'data-model': row.model
+  }
+}
 
 // Pagination
 const pagination = {
@@ -967,8 +1072,18 @@ const setAsRedirect = async (model) => {
 // 跳转到目标模型
 const jumpToTargetModel = () => {
   currentPage.value = 'models'
+
   // 展开所有分组
   expandedGroups.value = Object.keys(groupedRoutes.value)
+
+  // 等待DOM更新后滚动到目标模型
+  nextTick(() => {
+    // 查找目标模型所在的行
+    const targetRows = document.querySelectorAll('[data-model="' + redirectConfig.value.targetModel + '"]')
+    if (targetRows.length > 0) {
+      targetRows[0].scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  })
 }
 
 // Table columns for home page
@@ -1135,6 +1250,9 @@ const loadRoutes = async () => {
     const data = await window.go.main.App.GetRoutes()
     routes.value = data || []
     console.log('Routes loaded:', routes.value.length)
+
+    // 自动展开所有分组
+    expandedGroups.value = Object.keys(groupedRoutes.value)
   } catch (error) {
     console.error('Failed to load routes:', error)
     showMessage("error", '加载路由失败: ' + error)
@@ -1201,12 +1319,18 @@ const loadConfig = async () => {
       return
     }
     const data = await window.go.main.App.GetConfig()
-    config.value = data || config.value
+    // 映射后端字段名到前端字段名
+    config.value = {
+      localApiKey: data.localApiKey || '',
+      localApiEndpoint: data.openaiEndpoint || ''
+    }
     redirectConfig.value.enabled = data.redirectEnabled || false
     redirectConfig.value.keyword = data.redirectKeyword || 'proxy_auto'
     redirectConfig.value.targetModel = data.redirectTargetModel || ''
     redirectConfig.value.targetName = data.redirectTargetName || ''
     settings.value.redirectKeyword = data.redirectKeyword || 'proxy_auto' // 同步到设置
+    settings.value.minimizeToTray = data.minimizeToTray || false
+    settings.value.autoStart = data.autoStart || false
     console.log('Config loaded:', config.value)
   } catch (error) {
     console.error('加载配置失败:', error)
@@ -1233,81 +1357,19 @@ const saveRedirectConfig = async () => {
 }
 
 // 清理 API URL，移除末尾斜杠
-const cleanApiUrl = () => {
-  if (formModel.value.apiUrl) {
-    const cleaned = formModel.value.apiUrl.trim().replace(/\/+$/, '')
-    if (cleaned !== formModel.value.apiUrl) {
-      formModel.value.apiUrl = cleaned
-      showMessage("info", 'API URL 已自动移除末尾斜杠')
-    }
-  }
+const handleRouteAdded = () => {
+  loadRoutes()
+  loadStats()
 }
 
-const handleSubmit = async () => {
-  if (!window.go || !window.go.main || !window.go.main.App) {
-    showMessage("error", 'Wails 运行时未就绪')
-    return
-  }
-  try {
-    await formRef.value?.validate()
-    submitting.value = true
-
-    // 清理 API URL（移除末尾斜杠）
-    const cleanedApiUrl = formModel.value.apiUrl.trim().replace(/\/+$/, '')
-
-    if (editingRoute.value) {
-      await window.go.main.App.UpdateRoute(
-        editingRoute.value.id,
-        formModel.value.name,
-        formModel.value.model,
-        cleanedApiUrl,
-        formModel.value.apiKey,
-        formModel.value.group
-      )
-      showMessage("success", '路由已更新')
-    } else {
-      await window.go.main.App.AddRoute(
-        formModel.value.name,
-        formModel.value.model,
-        cleanedApiUrl,
-        formModel.value.apiKey,
-        formModel.value.group
-      )
-      showMessage("success", '路由已添加')
-    }
-
-    showAddModal.value = false
-    editingRoute.value = null
-    formModel.value = {
-      name: '',
-      model: '',
-      apiUrl: '',
-      apiKey: '',
-      group: '',
-    }
-    loadRoutes()
-    loadStats()
-  } catch (error) {
-    if (error.errors) {
-      // 表单验证错误
-      return
-    }
-    showMessage("error", '操作失败: ' + error)
-  } finally {
-    submitting.value = false
-  }
+const handleRouteUpdated = () => {
+  loadRoutes()
+  loadStats()
 }
 
 const handleEdit = (row) => {
   editingRoute.value = row
-  formModel.value = {
-    name: row.name,
-    model: row.model,
-    apiUrl: row.api_url,
-    apiKey: row.api_key,
-    group: row.group,
-  }
-  showAddModal.value = true
+  showEditModal.value = true
 }
 
 const handleDelete = async (row) => {
@@ -1325,73 +1387,7 @@ const handleDelete = async (row) => {
   }
 }
 
-const fetchModels = async () => {
-  if (!formModel.value.apiUrl) {
-    showMessage("warning", '请先输入 API URL')
-    return
-  }
 
-  // 检查 Wails 运行时
-  if (!window.go || !window.go.main || !window.go.main.App) {
-    showMessage("error", 'Wails 运行时未就绪，请使用编译后的 exe 或 wails dev')
-    return
-  }
-
-  fetchingModels.value = true
-  try {
-    const models = await window.go.main.App.FetchRemoteModels(
-      formModel.value.apiUrl,
-      formModel.value.apiKey || ''
-    )
-    fetchedModels.value = models
-    showModelSelectModal.value = true
-  } catch (error) {
-    showMessage("error", '获取模型列表失败: ' + error)
-  } finally {
-    fetchingModels.value = false
-  }
-}
-
-const selectModel = (model) => {
-  formModel.value.model = model
-  showModelSelectModal.value = false
-  modelSearchKeyword.value = '' // 清空搜索
-  showMessage("success", '已选择模型: ' + model)
-}
-
-// 根据模型名称识别提供商
-const getModelProvider = (model) => {
-  const lowerModel = model.toLowerCase()
-  if (lowerModel.includes('gpt') || lowerModel.includes('openai')) return 'OpenAI'
-  if (lowerModel.includes('claude')) return 'Anthropic'
-  if (lowerModel.includes('gemini')) return 'Google'
-  if (lowerModel.includes('deepseek')) return 'DeepSeek'
-  if (lowerModel.includes('glm') || lowerModel.includes('chatglm')) return '智谱AI'
-  if (lowerModel.includes('qwen') || lowerModel.includes('通义')) return '阿里云'
-  if (lowerModel.includes('ernie') || lowerModel.includes('文心')) return '百度'
-  if (lowerModel.includes('spark') || lowerModel.includes('讯飞')) return '讯飞'
-  if (lowerModel.includes('llama')) return 'Meta'
-  if (lowerModel.includes('mistral')) return 'Mistral'
-  return '其他'
-}
-
-// 根据提供商返回标签颜色
-const getModelTagType = (model) => {
-  const provider = getModelProvider(model)
-  const typeMap = {
-    'OpenAI': 'success',
-    'Anthropic': 'info',
-    'Google': 'warning',
-    'DeepSeek': 'error',
-    '智谱AI': 'primary',
-    '阿里云': 'default',
-    '百度': 'info',
-    '讯飞': 'success',
-    'Meta': 'warning',
-    'Mistral': 'error'
-  }
-  return typeMap[provider] || 'default'
-}
 
 const maskApiKey = (key) => {
   if (!key || key.length <= 10) return key
@@ -1415,6 +1411,33 @@ const formatNumber = (num) => {
     return (num / 1000).toFixed(1) + 'K'
   }
   return num.toString()
+}
+
+// 生成随机 API Key
+const generateRandomApiKey = () => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  let result = 'sk-'
+  for (let i = 0; i < 48; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return result
+}
+
+// 随机更新 API Key
+const generateNewApiKey = async () => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+
+  try {
+    const newApiKey = generateRandomApiKey()
+    await window.go.main.App.UpdateLocalApiKey(newApiKey)
+    showMessage("success", 'API Key 已随机更新')
+    await loadConfig() // 重新加载配置
+  } catch (error) {
+    showMessage("error", '更新 API Key 失败: ' + error)
+  }
 }
 
 // 导出路由为 JSON
@@ -1448,6 +1471,33 @@ const exportRoutes = () => {
 // 触发文件选择
 const triggerImport = () => {
   fileInput.value?.click()
+}
+
+// 显示清除数据确认对话框
+const showClearStatsDialog = () => {
+  showClearDialog.value = true
+}
+
+// 确认清除统计数据
+const confirmClearStats = async () => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", 'Wails 运行时未就绪')
+    return
+  }
+
+  try {
+    await window.go.main.App.ClearStats()
+    showMessage("success", '统计数据已清空')
+    showClearDialog.value = false
+
+    // 重新加载数据
+    await loadStats()
+    await loadDailyStats()
+    await loadHourlyStats()
+    await loadModelRanking()
+  } catch (error) {
+    showMessage("error", '清空失败: ' + error)
+  }
 }
 
 // 处理文件导入
@@ -1536,7 +1586,46 @@ onMounted(async () => {
     loadModelRanking()
   }, 300000)
 })
+
+// Watch groupedRoutes to automatically expand all groups when they change
+watch(groupedRoutes, (newGroups) => {
+  console.log('Grouped routes changed, expanding all groups')
+  expandedGroups.value = Object.keys(newGroups)
+}, { deep: true })
 </script>
+
+<style>
+/* 全局滚动条隐藏 - Wails 专用 */
+:deep(*)::-webkit-scrollbar {
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+  display: none !important;
+}
+
+:deep(*) {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+/* 针对 Naive UI 组件的特殊处理 */
+:deep(.n-layout-content) {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+:deep(.n-layout-content::-webkit-scrollbar),
+:deep(.n-data-table::-webkit-scrollbar),
+:deep(.n-card::-webkit-scrollbar),
+:deep(.n-scrollbar::-webkit-scrollbar),
+:deep(.n-collapse-item::-webkit-scrollbar),
+:deep(.n-tab-pane::-webkit-scrollbar) {
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+  display: none !important;
+}
+</style>
 
 <style scoped>
 :deep(.n-card__content) {
@@ -1558,27 +1647,26 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.selected-model-card {
-  border: 2px solid #18a058 !important;
-  box-shadow: 0 0 10px rgba(24, 160, 88, 0.3) !important;
-}
 
-.selected-model-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(24, 160, 88, 0.4) !important;
-}
 
 /* GitHub 热力图样式 */
 .heatmap-container {
   padding: 20px;
+  position: relative;
 }
 
-.heatmap-months {
-  display: flex;
-  justify-content: space-around;
+.heatmap-months-row {
+  position: relative;
+  height: 20px;
   margin-bottom: 8px;
   font-size: 12px;
   color: #888;
+}
+
+.heatmap-month-label {
+  position: absolute;
+  white-space: nowrap;
+  transform: translateX(0);
 }
 
 .heatmap-grid {
@@ -1608,7 +1696,7 @@ onMounted(async () => {
 }
 
 .heatmap-cell.level-0 {
-  background-color: #ebedf0;
+  background-color: #3a3a3a;
 }
 
 .heatmap-cell.level-1 {
@@ -1625,6 +1713,19 @@ onMounted(async () => {
 
 .heatmap-cell.level-4 {
   background-color: #216e39;
+}
+
+.heatmap-tooltip {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .heatmap-legend {
@@ -1644,7 +1745,7 @@ onMounted(async () => {
 }
 
 .legend-box.level-0 {
-  background-color: #ebedf0;
+  background-color: #3a3a3a;
 }
 
 .legend-box.level-1 {

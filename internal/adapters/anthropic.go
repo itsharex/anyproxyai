@@ -1,5 +1,9 @@
 package adapters
 
+import (
+	"fmt"
+)
+
 type AnthropicAdapter struct{}
 
 func (a *AnthropicAdapter) AdaptRequest(request map[string]interface{}, targetModel string) (map[string]interface{}, error) {
@@ -157,7 +161,7 @@ func (a *AnthropicAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[s
 		// Claude API 的 content_block_delta 事件
 		var contentText string
 		if delta, ok := chunk["delta"].(map[string]interface{}); ok {
-			contentText = getOrDefault(delta, "text", "").(string)
+			contentText = getStringValue(delta, "text", "")
 		}
 
 		base["choices"] = []map[string]interface{}{
@@ -180,11 +184,32 @@ func (a *AnthropicAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[s
 			},
 		}
 	case "message_delta":
-		// Claude API 的 message_delta 事件，包含停止原因
+		// Claude API 的 message_delta 事件，包含停止原因和使用量信息
 		var finishReason string
+		var completionTokens int
+
 		if delta, ok := chunk["delta"].(map[string]interface{}); ok {
-			if stopReason, ok := delta["stop_reason"].(string); ok {
+			// 安全地获取停止原因
+			if stopReason := getInterfaceValue(delta, "stop_reason"); stopReason != nil {
 				finishReason = a.convertStopReason(stopReason)
+			}
+
+			// 提取输出token使用信息
+			if usage := getInterfaceValue(delta, "usage"); usage != nil {
+				if usageMap, ok := usage.(map[string]interface{}); ok {
+					if outputTokens := getInterfaceValue(usageMap, "output_tokens"); outputTokens != nil {
+						if tokens, ok := outputTokens.(float64); ok {
+							completionTokens = int(tokens)
+						}
+					}
+				}
+			}
+		}
+		
+		// 如果有completion tokens信息，添加到usage中
+		if completionTokens > 0 {
+			base["usage"] = map[string]interface{}{
+				"completion_tokens": completionTokens,
 			}
 		}
 		
@@ -230,8 +255,18 @@ func (a *AnthropicAdapter) convertContent(content interface{}) interface{} {
 	return content
 }
 
-func (a *AnthropicAdapter) convertStopReason(reason string) string {
-	switch reason {
+func (a *AnthropicAdapter) convertStopReason(reason interface{}) string {
+	if reason == nil {
+		return "stop"
+	}
+
+	reasonStr, ok := reason.(string)
+	if !ok {
+		// 如果不是字符串，转换为字符串
+		reasonStr = fmt.Sprintf("%v", reason)
+	}
+
+	switch reasonStr {
 	case "end_turn":
 		return "stop"
 	case "max_tokens":
@@ -248,4 +283,40 @@ func getOrDefault(m map[string]interface{}, key string, defaultValue interface{}
 		return val
 	}
 	return defaultValue
+}
+
+// 安全地获取字符串值，处理类型转换
+func getStringValue(m map[string]interface{}, key string, defaultValue string) string {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case string:
+			return v
+		case []byte:
+			return string(v)
+		default:
+			// 如果不是字符串类型，尝试转换为字符串
+			if v != nil {
+				return fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	return defaultValue
+}
+
+// 安全地获取接口值，防止 nil panic
+func getInterfaceValue(m map[string]interface{}, key string) interface{} {
+	if val, ok := m[key]; ok {
+		return val
+	}
+	return nil
+}
+
+func (a *AnthropicAdapter) AdaptStreamStart(model string) []map[string]interface{} {
+	// Anthropic 适配器不需要转换开始事件
+	return nil
+}
+
+func (a *AnthropicAdapter) AdaptStreamEnd() []map[string]interface{} {
+	// Anthropic 适配器不需要转换结束事件
+	return nil
 }

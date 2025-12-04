@@ -67,7 +67,7 @@ func main() {
 	}()
 
 	// 创建 Wails 应用
-	log.Info("Starting Wails application...")
+	log.Info("Starting Wails GUI application...")
 
 	// 从 embed.FS 中提取 frontend/dist 子目录
 	distFS, err := fs.Sub(assets, "frontend/dist")
@@ -76,7 +76,7 @@ func main() {
 	}
 
 	err = wails.Run(&options.App{
-		Title:  "OpenAI Router Manager",
+		Title:  "AnyProxyAi Manager",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{
@@ -103,17 +103,20 @@ type App struct {
 	config       *config.Config
 	autoStart    *system.AutoStart
 	systemTray   *system.SystemTray
+	forceQuit    bool
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	log.Info("=== Wails application startup callback executed ===")
-	log.Infof("Route service: %v", a.routeService != nil)
-	log.Infof("Proxy service: %v", a.proxyService != nil)
-	log.Infof("Config loaded: %v", a.config != nil)
 
 	// 初始化系统托盘
 	a.systemTray = system.NewSystemTray(ctx)
+	a.systemTray.SetQuitCallback(func() {
+		a.forceQuit = true
+		a.config.MinimizeToTray = false
+		runtime.Quit(ctx)
+	})
 	if err := a.systemTray.Setup(); err != nil {
 		log.Warnf("Failed to setup system tray: %v", err)
 	}
@@ -121,15 +124,19 @@ func (a *App) startup(ctx context.Context) {
 
 // beforeClose 在窗口关闭前调用
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
-	// 如果启用了最小化到托盘，则隐藏窗口而不退出
+	if a.forceQuit {
+		log.Info("Force quit from tray, closing application")
+		return false
+	}
+
 	if a.config.MinimizeToTray {
 		log.Info("Minimizing to tray instead of closing")
 		runtime.WindowHide(a.ctx)
-		return true // 阻止关闭
+		return true
 	}
 
 	log.Info("Application closing")
-	return false // 允许关闭
+	return false
 }
 
 // GetRoutes 获取所有路由
@@ -148,6 +155,7 @@ func (a *App) GetRoutes() ([]map[string]interface{}, error) {
 			"api_url": route.APIUrl,
 			"api_key": route.APIKey,
 			"group":   route.Group,
+			"format":  route.Format,
 			"enabled": route.Enabled,
 			"created": route.CreatedAt,
 			"updated": route.UpdatedAt,
@@ -157,13 +165,13 @@ func (a *App) GetRoutes() ([]map[string]interface{}, error) {
 }
 
 // AddRoute 添加路由
-func (a *App) AddRoute(name, model, apiUrl, apiKey, group string) error {
-	return a.routeService.AddRoute(name, model, apiUrl, apiKey, group)
+func (a *App) AddRoute(name, model, apiUrl, apiKey, group, format string) error {
+	return a.routeService.AddRoute(name, model, apiUrl, apiKey, group, format)
 }
 
 // UpdateRoute 更新路由
-func (a *App) UpdateRoute(id int64, name, model, apiUrl, apiKey, group string) error {
-	return a.routeService.UpdateRoute(id, name, model, apiUrl, apiKey, group)
+func (a *App) UpdateRoute(id int64, name, model, apiUrl, apiKey, group, format string) error {
+	return a.routeService.UpdateRoute(id, name, model, apiUrl, apiKey, group, format)
 }
 
 // DeleteRoute 删除路由
@@ -199,7 +207,7 @@ func (a *App) GetModelRanking(limit int) ([]map[string]interface{}, error) {
 func (a *App) GetConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"localApiKey":         a.config.LocalAPIKey,
-		"localApiEndpoint":    fmt.Sprintf("http://%s:%d/api", a.config.Host, a.config.Port),
+		"openaiEndpoint":      fmt.Sprintf("http://%s:%d", a.config.Host, a.config.Port),
 		"redirectEnabled":     a.config.RedirectEnabled,
 		"redirectKeyword":     a.config.RedirectKeyword,
 		"redirectTargetModel": a.config.RedirectTargetModel,
@@ -217,9 +225,20 @@ func (a *App) UpdateConfig(redirectEnabled bool, redirectKeyword, redirectTarget
 	return a.config.Save()
 }
 
+// UpdateLocalApiKey 更新本地 API Key
+func (a *App) UpdateLocalApiKey(newApiKey string) error {
+	a.config.LocalAPIKey = newApiKey
+	return a.config.Save()
+}
+
 // FetchRemoteModels 获取远程模型列表
 func (a *App) FetchRemoteModels(apiUrl, apiKey string) ([]string, error) {
 	return a.proxyService.FetchRemoteModels(apiUrl, apiKey)
+}
+
+// ImportRouteFromFormat 从不同格式导入路由
+func (a *App) ImportRouteFromFormat(name, model, apiUrl, apiKey, group, targetFormat string) (string, error) {
+	return a.routeService.ImportRouteFromFormat(name, model, apiUrl, apiKey, group, targetFormat)
 }
 
 // GetAppSettings 获取应用设置
@@ -259,7 +278,6 @@ func (a *App) SetAutoStart(enabled bool) error {
 		return fmt.Errorf("auto-start manager not initialized")
 	}
 
-	// 更新注册表
 	if enabled {
 		if err := a.autoStart.EnableAutoStart(); err != nil {
 			log.Errorf("Failed to enable auto-start: %v", err)
@@ -272,7 +290,6 @@ func (a *App) SetAutoStart(enabled bool) error {
 		}
 	}
 
-	// 更新配置
 	a.config.AutoStart = enabled
 	if err := a.config.Save(); err != nil {
 		log.Errorf("Failed to save config: %v", err)
@@ -299,6 +316,18 @@ func (a *App) HideWindow() {
 // QuitApp 退出应用
 func (a *App) QuitApp() {
 	log.Info("Quitting application")
+	a.forceQuit = true
 	a.config.MinimizeToTray = false
 	runtime.Quit(a.ctx)
+}
+
+// ClearStats 清除统计数据
+func (a *App) ClearStats() error {
+	err := a.routeService.ClearStats()
+	if err != nil {
+		return fmt.Errorf("failed to clear statistics: %v", err)
+	}
+
+	log.Info("Statistics cleared successfully")
+	return nil
 }

@@ -5,6 +5,8 @@ type Adapter interface {
 	AdaptRequest(request map[string]interface{}, targetModel string) (map[string]interface{}, error)
 	AdaptResponse(response map[string]interface{}) (map[string]interface{}, error)
 	AdaptStreamChunk(chunk map[string]interface{}) (map[string]interface{}, error)
+	AdaptStreamStart(model string) []map[string]interface{}
+	AdaptStreamEnd() []map[string]interface{}
 }
 
 // 适配器注册表
@@ -28,4 +30,5 @@ func init() {
 	RegisterAdapter("anthropic", &AnthropicAdapter{})
 	RegisterAdapter("gemini", &GeminiAdapter{})
 	RegisterAdapter("deepseek", &DeepSeekAdapter{})
+	RegisterAdapter("openai-to-claude", &OpenAIToClaudeAdapter{})
 }

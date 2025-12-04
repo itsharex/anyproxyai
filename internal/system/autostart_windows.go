@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 package system
 
 import (
@@ -11,7 +14,7 @@ import (
 
 const (
 	registryPath = `Software\Microsoft\Windows\CurrentVersion\Run`
-	appName      = "OpenAIRouter"
+	appName      = "AnyProxyAi"
 )
 
 type AutoStart struct{}

@@ -1,3 +1,4 @@
+//go:build darwin
 // +build darwin
 
 package system
@@ -29,7 +30,7 @@ const (
 	<false/>
 </dict>
 </plist>`
-	appLabel = "com.openai-router.app"
+	appLabel = "com.anyproxyai.app"
 )
 
 type AutoStart struct{}

@@ -16,6 +16,7 @@ type ModelRoute struct {
 	APIUrl    string    `json:"api_url"`
 	APIKey    string    `json:"api_key"`
 	Group     string    `json:"group"`
+	Format    string    `json:"format"`    // 新增：格式类型 (openai, claude, gemini)
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -59,6 +60,7 @@ func createTables(db *sql.DB) error {
 		api_url TEXT NOT NULL,
 		api_key TEXT,
 		"group" TEXT,
+		format TEXT DEFAULT 'openai',
 		enabled INTEGER DEFAULT 1,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -88,5 +90,16 @@ func createTables(db *sql.DB) error {
 	`
 
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 添加 format 列（如果不存在）- 数据库迁移
+	migration := `
+	ALTER TABLE model_routes ADD COLUMN format TEXT DEFAULT 'openai';
+	`
+	// 忽略错误，因为列可能已经存在
+	db.Exec(migration)
+
+	return nil
 }

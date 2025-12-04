@@ -1,10 +1,10 @@
-# OpenAI Router - GUI 管理工具
+# AnyProxyAi - GUI 管理工具
 
 Golang + Wails 桌面应用，OpenAI API 路由管理。
 
 ## 快速开始
 
-**Windows 双击运行**：`build\bin\openai-router.exe`
+**Windows 双击运行**：`build\bin\anyproxyai.exe`
 
 或使用：`start.bat`
 
@@ -16,7 +16,7 @@ Golang + Wails 桌面应用，OpenAI API 路由管理。
 - 远程模型列表获取
 - 统计信息
 - 嵌入式 API 服务器（localhost:8000）
-- API 适配器（Claude / Gemini / DeepSeek）
+- API 适配器（Claude / DeepSeek）
 
 ## 构建
 
@@ -46,3 +46,7 @@ response = client.chat.completions.create(
 - 后端：Go + Gin + SQLite
 - 前端：Vue 3 + Naive UI
 - 桌面：Wails v2
+
+## GitHub
+
+https://github.com/cniu6/anyproxyai
