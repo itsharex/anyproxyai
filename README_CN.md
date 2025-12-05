@@ -11,7 +11,7 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
-**💰 此工具价值 100 美金 - 使用等值 Claude AI 辅助开发**
+**💰 此工具价值 100 美金 - 因为花费了等值的 Claude Opus 4.5 辅助开发**
 
 </div>
 
@@ -51,18 +51,18 @@ AnyProxyAi 是一个通用的 AI API 代理路由器，支持多种 API 格式�
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png5.png?raw=true" alt="设置" width="80%">
-  <br/>设置页面
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png5.png?raw=true" alt="Linux 运行" width="80%">
+  <br/>Linux 端运行
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png6.png?raw=true" alt="语言切换" width="80%">
-  <br/>语言切换（持久化保存）
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png6.png?raw=true" alt="Claude Code 转 OpenAI" width="80%">
+  <br/>Claude Code 接口转换为 OpenAI 格式
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png7.png?raw=true" alt="深色主题" width="80%">
-  <br/>深色主题
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png7.png?raw=true" alt="OpenAI 格式转换" width="80%">
+  <br/>OpenAI 格式转换
 </p>
 
 ## ✨ 功能特性
@@ -151,26 +151,28 @@ chmod +x anyproxyai-linux-amd64
 **OpenAI 兼容接口：**
 ```
 API Base URL: http://localhost:8080/api
-API Key: （任意值）
+API Key: （使用主页显示的密钥，或禁用验证时可填任意值）
 ```
 
 **Claude/Anthropic 接口：**
 ```
 API Base URL: http://localhost:8080/api/anthropic
-API Key: （任意值）
+API Key: （使用主页显示的密钥，或禁用验证时可填任意值）
 ```
 
 **Claude Code 专用接口：**
 ```
 API Base URL: http://localhost:8080/api/claudecode
-API Key: （任意值）
+API Key: （使用主页显示的密钥，或禁用验证时可填任意值）
 ```
 
 **Gemini 接口：**
 ```
 API Base URL: http://localhost:8080/api/gemini
-API Key: （任意值）
+API Key: （使用主页显示的密钥，或禁用验证时可填任意值）
 ```
+
+> **注意**：主页显示的 API Key 用于身份验证。如需禁用验证，请在 `config.json` 中将 `local_api_key` 设置为空字符串。
 
 #### 3. 使用代理重定向（可选）
 
@@ -200,10 +202,10 @@ API Key: （任意值）
                         │  └───────────────────────────────────────────────┘ │
                         │                        │                            │
                         │  ┌─────────────────────▼─────────────────────────┐ │
-                        │  │           后端路由                             │ │
+                        │  │           后端路由（云端）                      │ │
                         │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │ │
                         │  │  │ OpenAI   │ │ Claude   │ │ Gemini   │       │ │
-                        │  │  │ API      │ │ API      │ │ API      │       │ │
+                        │  │  │ 云端     │ │ 云端     │ │ 云端     │       │ │
                         │  │  └──────────┘ └──────────┘ └──────────┘       │ │
                         │  └───────────────────────────────────────────────┘ │
                         └─────────────────────────────────────────────────────┘
@@ -396,6 +398,13 @@ A: 点击右上角的语言图标，弹出语言切换窗口。设置会持久�
 
 **Q: 如何添加新的适配器？**
 A: 在 `internal/adapters/` 中实现 `Adapter` 接口，并在 `adapter.go` 中注册。
+
+## � 参考证项目
+
+本项目受以下项目启发并参考：
+
+- [ccNexus](https://github.com/lich0821/ccNexus) - Claude Code Nexus
+- [LLM-API-Transform-Proxy](https://github.com/wcpsoft/LLM-API-Transform-Proxy) - LLM API 转换代理
 
 ## 📄 许可证
 

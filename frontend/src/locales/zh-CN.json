@@ -130,8 +130,7 @@
     "tokens": "Token",
     "requestCount": "请求",
     "clearSuccess": "统计数据已清空",
-    "clearFailed": "清空失败",
-    "months": ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
+    "clearFailed": "清空失败"
   },
   "settings": {
     "title": "应用设置",
@@ -145,6 +144,10 @@
     "save": "保存",
     "autoStart": "开机自启动",
     "minimizeToTray": "关闭时最小化到托盘",
+    "enableFileLog": "启用文件日志",
+    "enableFileLogDesc": "启用后日志将保存到 log/ 目录，按日期分文件存储",
+    "fileLogEnabled": "已启用文件日志",
+    "fileLogDisabled": "已禁用文件日志",
     "themeSettings": "主题设置",
     "currentTheme": "当前主题",
     "darkMode": "暗黑模式",

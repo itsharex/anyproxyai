@@ -4,7 +4,11 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
+	"time"
 
 	"openai-router-go/internal/config"
 	"openai-router-go/internal/database"
@@ -23,6 +27,34 @@ import (
 //go:embed frontend/dist
 var assets embed.FS
 
+// 全局日志文件句柄
+var logFile *os.File
+
+// setupFileLogging 设置文件日志
+func setupFileLogging() (*os.File, error) {
+	// 创建 log 目录
+	logDir := "log"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create log directory: %v", err)
+	}
+
+	// 使用当前日期作为日志文件名
+	today := time.Now().Format("2006-01-02")
+	logPath := filepath.Join(logDir, today+".log")
+
+	// 打开或创建日志文件（追加模式）
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %v", err)
+	}
+
+	// 设置日志同时输出到控制台和文件
+	mw := io.MultiWriter(os.Stdout, file)
+	log.SetOutput(mw)
+
+	return file, nil
+}
+
 func main() {
 	// 初始化日志
 	log.SetFormatter(&log.TextFormatter{
@@ -32,6 +64,18 @@ func main() {
 
 	// 加载配置
 	cfg := config.LoadConfig()
+
+	// 如果启用了文件日志，设置文件日志
+	if cfg.EnableFileLog {
+		var err error
+		logFile, err = setupFileLogging()
+		if err != nil {
+			log.Warnf("Failed to setup file logging: %v", err)
+		} else {
+			log.Info("File logging enabled, logs will be saved to log/ directory")
+			defer logFile.Close()
+		}
+	}
 
 	// 初始化数据库
 	db, err := database.InitDB(cfg.DatabasePath)
@@ -214,6 +258,7 @@ func (a *App) GetConfig() map[string]interface{} {
 		"redirectTargetName":  a.config.RedirectTargetName,
 		"minimizeToTray":      a.config.MinimizeToTray,
 		"autoStart":           a.config.AutoStart,
+		"enableFileLog":       a.config.EnableFileLog,
 	}
 }
 
@@ -329,5 +374,38 @@ func (a *App) ClearStats() error {
 	}
 
 	log.Info("Statistics cleared successfully")
+	return nil
+}
+
+// SetEnableFileLog 设置是否启用文件日志
+func (a *App) SetEnableFileLog(enabled bool) error {
+	log.Infof("Setting enable file log: %v", enabled)
+	a.config.EnableFileLog = enabled
+
+	if err := a.config.Save(); err != nil {
+		log.Errorf("Failed to save config: %v", err)
+		return fmt.Errorf("failed to save config: %v", err)
+	}
+
+	// 如果启用日志且当前没有日志文件，则设置文件日志
+	if enabled && logFile == nil {
+		var err error
+		logFile, err = setupFileLogging()
+		if err != nil {
+			log.Warnf("Failed to setup file logging: %v", err)
+			return fmt.Errorf("failed to setup file logging: %v", err)
+		}
+		log.Info("File logging enabled")
+	}
+
+	// 如果禁用日志，关闭日志文件并重置输出
+	if !enabled && logFile != nil {
+		log.Info("File logging disabled")
+		log.SetOutput(os.Stdout)
+		logFile.Close()
+		logFile = nil
+	}
+
+	log.Info("File log setting updated successfully")
 	return nil
 }

@@ -29,8 +29,64 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 	// 创建对话聚合服务
 	conversationService := service.NewConversationService(routeService, proxyService, cfg)
 
+	// API 密钥验证中间件
+	apiKeyAuth := func(c *gin.Context) {
+		// 如果没有配置本地 API Key，则跳过验证
+		if cfg.LocalAPIKey == "" {
+			c.Next()
+			return
+		}
+
+		// 从 Authorization header 获取 API Key
+		authHeader := c.GetHeader("Authorization")
+		apiKey := ""
+
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			apiKey = strings.TrimPrefix(authHeader, "Bearer ")
+		} else if strings.HasPrefix(authHeader, "bearer ") {
+			apiKey = strings.TrimPrefix(authHeader, "bearer ")
+		}
+
+		// 也支持从 x-api-key header 获取
+		if apiKey == "" {
+			apiKey = c.GetHeader("x-api-key")
+		}
+
+		// 支持 Gemini 风格的 x-goog-api-key header
+		if apiKey == "" {
+			apiKey = c.GetHeader("x-goog-api-key")
+		}
+
+		// 支持 Gemini 风格的 URL 参数 key=xxx
+		if apiKey == "" {
+			apiKey = c.Query("key")
+		}
+
+		// 调试日志：打印收到的认证信息
+		log.Debugf("API Key Auth - Authorization: %s, x-api-key: %s, x-goog-api-key: %s, query key: %s",
+			authHeader, c.GetHeader("x-api-key"), c.GetHeader("x-goog-api-key"), c.Query("key"))
+
+		// 验证 API Key
+		if apiKey != cfg.LocalAPIKey {
+			log.Warnf("Invalid API key from %s, path: %s, received key: '%s', expected: '%s'",
+				c.ClientIP(), c.Request.URL.Path, apiKey, cfg.LocalAPIKey)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": gin.H{
+					"message": "Invalid API key. Please check your API key and try again.",
+					"type":    "invalid_api_key",
+					"code":    "invalid_api_key",
+				},
+			})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+
 	// API 路由组
 	api := r.Group("/api")
+	api.Use(apiKeyAuth) // 应用 API 密钥验证中间件
 	{
 		// 列出可用模型 - OpenAI 标准接口 /api/models（包含重定向关键字）
 		api.GET("/models", func(c *gin.Context) {

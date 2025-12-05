@@ -424,7 +424,7 @@
                     v-for="monthData in heatmapMonthsWithPosition" 
                     :key="monthData.weekIndex"
                     class="heatmap-month-label"
-                    :style="{ left: (monthData.weekIndex * 14) + 'px' }"
+                    :style="{ left: (monthData.weekIndex / 53 * 100) + '%' }"
                   >{{ monthData.name }}</span>
                 </div>
                 <div class="heatmap-grid">
@@ -497,7 +497,7 @@
 
                   <n-space align="center">
                     <n-icon size="20"><InformationCircleIcon /></n-icon>
-                    <n-text>{{ t('settings.version') }}: v1.0.0</n-text>
+                    <n-text>{{ t('settings.version') }}: v1.0.1</n-text>
                   </n-space>
 
                   <n-space align="center">
@@ -539,6 +539,13 @@
                   <n-checkbox v-model:checked="settings.minimizeToTray" @update:checked="toggleMinimizeToTray">
                     {{ t('settings.minimizeToTray') }}
                   </n-checkbox>
+
+                  <n-checkbox v-model:checked="settings.enableFileLog" @update:checked="toggleEnableFileLog">
+                    {{ t('settings.enableFileLog') }}
+                  </n-checkbox>
+                  <n-text depth="3" style="font-size: 12px; margin-left: 24px;">
+                    {{ t('settings.enableFileLogDesc') }}
+                  </n-text>
                 </n-space>
               </div>
 
@@ -774,6 +781,7 @@ const settings = ref({
   redirectKeyword: 'proxy_auto',
   autoStart: false,
   minimizeToTray: false,
+  enableFileLog: false,
 })
 
 const updateRedirectKeyword = async () => {
@@ -829,6 +837,21 @@ const toggleMinimizeToTray = async (enabled) => {
   }
 }
 
+// 切换文件日志
+const toggleEnableFileLog = async (enabled) => {
+  if (!window.go || !window.go.main || !window.go.main.App) {
+    showMessage("error", t('messages.wailsNotReady'))
+    return
+  }
+  try {
+    await window.go.main.App.SetEnableFileLog(enabled)
+    showMessage("success", enabled ? t('settings.fileLogEnabled') : t('settings.fileLogDisabled'))
+  } catch (error) {
+    showMessage("error", t('messages.settingFailed') + ': ' + error)
+    settings.value.enableFileLog = !enabled // 恢复状态
+  }
+}
+
 // Stats
 const stats = ref({
   route_count: 0,
@@ -853,15 +876,13 @@ const heatmapTooltip = ref({
   requests: 0
 })
 
-// 显示热力图 tooltip
+// 显示热力图 tooltip（使用固定定位避免被边框遮挡）
 const showHeatmapTooltip = (event, day) => {
   const rect = event.target.getBoundingClientRect()
-  const container = event.target.closest('.heatmap-container')
-  const containerRect = container.getBoundingClientRect()
   heatmapTooltip.value = {
     show: true,
-    x: rect.left - containerRect.left + 15,
-    y: rect.top - containerRect.top - 60,
+    x: rect.left + rect.width / 2,
+    y: rect.top,
     date: day.date,
     tokens: day.tokens,
     requests: day.requests
@@ -924,7 +945,10 @@ const heatmapMonthsWithPosition = computed(() => {
   const dayOfWeek = startDate.getDay()
   startDate.setDate(startDate.getDate() - dayOfWeek)
   
-  const monthNames = t('stats.months')
+  // 使用 tm() 获取数组类型的翻译
+  const monthNames = locale.value === 'zh-CN' 
+    ? ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
+    : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   let lastMonth = -1
   
   // 遍历所有天数来检测月份变化
@@ -1400,6 +1424,7 @@ const loadConfig = async () => {
     settings.value.redirectKeyword = data.redirectKeyword || 'proxy_auto' // 同步到设置
     settings.value.minimizeToTray = data.minimizeToTray || false
     settings.value.autoStart = data.autoStart || false
+    settings.value.enableFileLog = data.enableFileLog || false
     console.log('Config loaded:', config.value)
   } catch (error) {
     console.error('加载配置失败:', error)
@@ -1718,10 +1743,12 @@ watch(groupedRoutes, (newGroups) => {
 
 
 
-/* GitHub 热力图样式 */
+/* GitHub 热力图样式 - 全屏版本 */
 .heatmap-container {
   padding: 20px;
   position: relative;
+  width: 100%;
+  overflow-x: auto;
 }
 
 .heatmap-months-row {
@@ -1730,6 +1757,7 @@ watch(groupedRoutes, (newGroups) => {
   margin-bottom: 8px;
   font-size: 12px;
   color: #888;
+  width: 100%;
 }
 
 .heatmap-month-label {
@@ -1740,19 +1768,25 @@ watch(groupedRoutes, (newGroups) => {
 
 .heatmap-grid {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   margin-bottom: 12px;
+  width: 100%;
+  justify-content: space-between;
 }
 
 .heatmap-week {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  flex: 1;
+  max-width: calc(100% / 53 - 4px);
 }
 
 .heatmap-cell {
-  width: 11px;
-  height: 11px;
+  width: 100%;
+  aspect-ratio: 1;
+  min-width: 10px;
+  max-width: 16px;
   border-radius: 2px;
   cursor: pointer;
   transition: all 0.2s;
@@ -1785,16 +1819,18 @@ watch(groupedRoutes, (newGroups) => {
 }
 
 .heatmap-tooltip {
-  position: absolute;
+  position: fixed;
   background: rgba(0, 0, 0, 0.85);
   color: #fff;
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
   pointer-events: none;
-  z-index: 100;
+  z-index: 1000;
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
 }
 
 .heatmap-legend {

@@ -130,8 +130,7 @@
     "tokens": "Tokens",
     "requestCount": "Requests",
     "clearSuccess": "Statistics cleared",
-    "clearFailed": "Clear failed",
-    "months": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    "clearFailed": "Clear failed"
   },
   "settings": {
     "title": "Application Settings",
@@ -145,6 +144,10 @@
     "save": "Save",
     "autoStart": "Auto Start on Boot",
     "minimizeToTray": "Minimize to Tray on Close",
+    "enableFileLog": "Enable File Logging",
+    "enableFileLogDesc": "When enabled, logs will be saved to log/ directory, organized by date",
+    "fileLogEnabled": "File logging enabled",
+    "fileLogDisabled": "File logging disabled",
     "themeSettings": "Theme Settings",
     "currentTheme": "Current Theme",
     "darkMode": "Dark Mode",

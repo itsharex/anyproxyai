@@ -11,7 +11,7 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
-**💰 This tool is valued at $100 USD - developed with Claude AI assistance at equivalent cost**
+**💰 This tool is valued at $100 USD - developed with equivalent cost of Claude Opus 4.5 AI assistance**
 
 </div>
 
@@ -51,18 +51,18 @@ AnyProxyAi is a universal AI API proxy router that supports multiple API formats
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png5.png?raw=true" alt="Settings" width="80%">
-  <br/>Settings Page
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png5.png?raw=true" alt="Linux" width="80%">
+  <br/>Linux Running
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png6.png?raw=true" alt="Language Switch" width="80%">
-  <br/>Language Switch (Persistent)
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png6.png?raw=true" alt="Claude Code to OpenAI" width="80%">
+  <br/>Claude Code Interface → OpenAI Format Conversion
 </p>
 
 <p align="center">
-  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png7.png?raw=true" alt="Dark Theme" width="80%">
-  <br/>Dark Theme
+  <img src="https://github.com/cniu6/anyproxyai/blob/master/img/png7.png?raw=true" alt="OpenAI Format Conversion" width="80%">
+  <br/>OpenAI Format Conversion
 </p>
 
 ## ✨ Features
@@ -151,26 +151,28 @@ Use the local proxy endpoint in your application:
 **OpenAI Compatible:**
 ```
 API Base URL: http://localhost:8080/api
-API Key: (any value)
+API Key: (use the key shown on home page, or any value if auth is disabled)
 ```
 
 **Claude/Anthropic:**
 ```
 API Base URL: http://localhost:8080/api/anthropic
-API Key: (any value)
+API Key: (use the key shown on home page, or any value if auth is disabled)
 ```
 
 **Claude Code:**
 ```
 API Base URL: http://localhost:8080/api/claudecode
-API Key: (any value)
+API Key: (use the key shown on home page, or any value if auth is disabled)
 ```
 
 **Gemini:**
 ```
 API Base URL: http://localhost:8080/api/gemini
-API Key: (any value)
+API Key: (use the key shown on home page, or any value if auth is disabled)
 ```
+
+> **Note**: The API Key shown on the home page is used for authentication. If you want to disable authentication, set `local_api_key` to empty string in `config.json`.
 
 #### 3. Use Proxy Redirect (Optional)
 
@@ -200,10 +202,10 @@ Enable redirect and set `proxy_auto` as your model name to automatically route t
                         │  └───────────────────────────────────────────────┘ │
                         │                        │                            │
                         │  ┌─────────────────────▼─────────────────────────┐ │
-                        │  │           Backend Routes                       │ │
+                        │  │           Backend Routes (Cloud)               │ │
                         │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │ │
                         │  │  │ OpenAI   │ │ Claude   │ │ Gemini   │       │ │
-                        │  │  │ API      │ │ API      │ │ API      │       │ │
+                        │  │  │ Cloud    │ │ Cloud    │ │ Cloud    │       │ │
                         │  │  └──────────┘ └──────────┘ └──────────┘       │ │
                         │  └───────────────────────────────────────────────┘ │
                         └─────────────────────────────────────────────────────┘
@@ -396,6 +398,13 @@ A: Click the language icon in the top-right corner to open the language switch p
 
 **Q: How to add a new adapter?**
 A: Implement the `Adapter` interface in `internal/adapters/` and register it in `adapter.go`.
+
+## 🙏 References
+
+This project was inspired by and references the following projects:
+
+- [ccNexus](https://github.com/lich0821/ccNexus) - Claude Code Nexus
+- [LLM-API-Transform-Proxy](https://github.com/wcpsoft/LLM-API-Transform-Proxy) - LLM API Transform Proxy
 
 ## 📄 License
 

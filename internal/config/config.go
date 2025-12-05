@@ -19,6 +19,7 @@ type Config struct {
 	RedirectTargetName  string `json:"redirect_target_name"`
 	MinimizeToTray      bool   `json:"minimize_to_tray"`
 	AutoStart           bool   `json:"auto_start"`
+	EnableFileLog       bool   `json:"enable_file_log"`
 	configPath          string
 }
 
@@ -36,6 +37,7 @@ func LoadConfig() *Config {
 		RedirectTargetName:  "",
 		MinimizeToTray:      true,
 		AutoStart:           false,
+		EnableFileLog:       false,
 		configPath:          configPath,
 	}
 
