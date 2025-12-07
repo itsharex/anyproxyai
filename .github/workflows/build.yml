@@ -29,9 +29,12 @@ jobs:
       
       - name: Check commit message for build triggers
         id: check
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
-          echo "Commit message: $COMMIT_MSG"
+          # 只取第一行作为提交标题
+          COMMIT_TITLE=$(echo "$COMMIT_MSG" | head -n 1)
+          echo "Commit title: $COMMIT_TITLE"
           
           # 默认值
           SHOULD_BUILD="false"
@@ -45,16 +48,16 @@ jobs:
             SHOULD_RELEASE="true"
             RELEASE_TAG="${{ github.ref_name }}"
             RELEASE_BODY="Release ${RELEASE_TAG}"
-          # 检查 tag(xxx): message 格式
-          elif [[ "$COMMIT_MSG" =~ ^tag\(([^)]+)\):(.*)$ ]]; then
+          # 检查 tag(xxx): message 格式 - 使用 grep 和 sed 代替 bash 正则
+          elif echo "$COMMIT_TITLE" | grep -qE '^tag\([^)]+\):'; then
             SHOULD_BUILD="true"
             SHOULD_RELEASE="true"
-            RELEASE_TAG="${BASH_REMATCH[1]}"
-            RELEASE_BODY="${BASH_REMATCH[2]}"
-            # 去除前后空格
-            RELEASE_BODY=$(echo "$RELEASE_BODY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            # 提取 tag 版本号
+            RELEASE_TAG=$(echo "$COMMIT_TITLE" | sed -E 's/^tag\(([^)]+)\):.*/\1/')
+            # 提取描述信息
+            RELEASE_BODY=$(echo "$COMMIT_TITLE" | sed -E 's/^tag\([^)]+\):[[:space:]]*//')
           # 检查 package( 开头
-          elif [[ "$COMMIT_MSG" =~ ^package\( ]]; then
+          elif echo "$COMMIT_TITLE" | grep -qE '^package\('; then
             SHOULD_BUILD="true"
           # 检查是否是 workflow_dispatch 或 PR
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || [[ "${{ github.event_name }}" == "pull_request" ]]; then
