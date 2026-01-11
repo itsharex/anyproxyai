@@ -140,7 +140,9 @@
     "totalUsage": "Total Usage",
     "period": "Period",
     "successCount": "Success",
-    "failCount": "Failed"
+    "failCount": "Failed",
+    "hourly": "Hourly",
+    "realtime": "Realtime"
   },
   "settings": {
     "title": "Application Settings",

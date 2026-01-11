@@ -205,6 +205,11 @@ func (a *AppService) GetHourlyStats() ([]map[string]interface{}, error) {
 	return a.RouteService.GetHourlyStats()
 }
 
+// GetSecondlyStats 获取秒级统计（用于实时折线图）
+func (a *AppService) GetSecondlyStats(minutes int) ([]map[string]interface{}, error) {
+	return a.RouteService.GetSecondlyStats(minutes)
+}
+
 // GetModelRanking 获取模型使用排行
 func (a *AppService) GetModelRanking(limit int) ([]map[string]interface{}, error) {
 	return a.RouteService.GetModelRanking(limit)

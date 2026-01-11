@@ -42,6 +42,7 @@ const createWailsShim = () => {
     GetStats: () => callService('GetStats'),
     GetDailyStats: (days) => callService('GetDailyStats', days),
     GetHourlyStats: () => callService('GetHourlyStats'),
+    GetSecondlyStats: (minutes) => callService('GetSecondlyStats', minutes),
     GetModelRanking: (limit) => callService('GetModelRanking', limit),
     ClearStats: () => callService('ClearStats'),
     

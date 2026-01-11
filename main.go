@@ -182,10 +182,16 @@ func main() {
 
 	// 聚焦主窗口的辅助函数
 	focusMainWindow := func() {
+		// 确保窗口可见后再聚焦，避免 WebView2 未初始化时的错误
+		if !mainWindow.IsVisible() {
+			return
+		}
 		if runtime.GOOS == "windows" {
 			mainWindow.SetAlwaysOnTop(true)
-			mainWindow.Focus()
+			// 延迟调用 Focus，给 WebView2 时间完成初始化
 			go func() {
+				time.Sleep(50 * time.Millisecond)
+				mainWindow.Focus()
 				time.Sleep(150 * time.Millisecond)
 				mainWindow.SetAlwaysOnTop(false)
 			}()
@@ -205,7 +211,11 @@ func main() {
 		}
 		mainWindow.Show()
 		if withFocus {
-			focusMainWindow()
+			// 延迟聚焦，确保窗口完全显示且 WebView2 已初始化
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				focusMainWindow()
+			}()
 		}
 	}
 

@@ -219,9 +219,28 @@ func (s *ProxyService) ProxyRequest(requestBody []byte, headers map[string]strin
 		var respData map[string]interface{}
 		if err := json.Unmarshal(responseBody, &respData); err == nil {
 			if usage, ok := respData["usage"].(map[string]interface{}); ok {
-				totalTokens := int(usage["total_tokens"].(float64))
-				promptTokens := int(usage["prompt_tokens"].(float64))
-				completionTokens := int(usage["completion_tokens"].(float64))
+				promptTokens := 0
+				completionTokens := 0
+				totalTokens := 0
+				if v, ok := usage["prompt_tokens"].(float64); ok {
+					promptTokens = int(v)
+				}
+				if v, ok := usage["completion_tokens"].(float64); ok {
+					completionTokens = int(v)
+				}
+				if v, ok := usage["total_tokens"].(float64); ok {
+					totalTokens = int(v)
+				}
+				// 兼容 Claude API 的 input_tokens/output_tokens
+				if v, ok := usage["input_tokens"].(float64); ok && promptTokens == 0 {
+					promptTokens = int(v)
+				}
+				if v, ok := usage["output_tokens"].(float64); ok && completionTokens == 0 {
+					completionTokens = int(v)
+				}
+				if totalTokens == 0 {
+					totalTokens = promptTokens + completionTokens
+				}
 				s.routeService.LogRequest(model, route.ID, promptTokens, completionTokens, totalTokens, true, "")
 			}
 		}
@@ -3409,12 +3428,32 @@ func detectRequestFormat(reqData map[string]interface{}) string {
 }
 
 // adaptCursorRequest 将 Cursor 格式请求转换为标准 OpenAI 格式
+// 包含 thinking 块的验证和修复
 func (s *ProxyService) adaptCursorRequest(reqData map[string]interface{}, model string) (map[string]interface{}, error) {
 	adapter := adapters.GetAdapter("cursor")
 	if adapter == nil {
 		return nil, fmt.Errorf("cursor adapter not found")
 	}
-	return adapter.AdaptRequest(reqData, model)
+
+	// 转换请求
+	convertedReq, err := adapter.AdaptRequest(reqData, model)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查是否需要禁用 thinking（基于历史兼容性）
+	if messages, ok := convertedReq["messages"].([]interface{}); ok {
+		if adapters.ShouldDisableThinkingDueToHistory(messages) {
+			log.Infof("[Cursor] Disabling thinking due to incompatible history")
+			// 移除 thinking 相关配置
+			delete(convertedReq, "thinking")
+		}
+
+		// 过滤无效的 thinking 块
+		adapters.FilterInvalidThinkingBlocks(messages)
+	}
+
+	return convertedReq, nil
 }
 
 // ProxyCursorRequest 代理 Cursor IDE 专用请求
@@ -3543,9 +3582,28 @@ func (s *ProxyService) ProxyCursorRequest(requestBody []byte, headers map[string
 		var respData map[string]interface{}
 		if err := json.Unmarshal(responseBody, &respData); err == nil {
 			if usage, ok := respData["usage"].(map[string]interface{}); ok {
-				totalTokens := int(usage["total_tokens"].(float64))
-				promptTokens := int(usage["prompt_tokens"].(float64))
-				completionTokens := int(usage["completion_tokens"].(float64))
+				promptTokens := 0
+				completionTokens := 0
+				totalTokens := 0
+				if v, ok := usage["prompt_tokens"].(float64); ok {
+					promptTokens = int(v)
+				}
+				if v, ok := usage["completion_tokens"].(float64); ok {
+					completionTokens = int(v)
+				}
+				if v, ok := usage["total_tokens"].(float64); ok {
+					totalTokens = int(v)
+				}
+				// 兼容 Claude API 的 input_tokens/output_tokens
+				if v, ok := usage["input_tokens"].(float64); ok && promptTokens == 0 {
+					promptTokens = int(v)
+				}
+				if v, ok := usage["output_tokens"].(float64); ok && completionTokens == 0 {
+					completionTokens = int(v)
+				}
+				if totalTokens == 0 {
+					totalTokens = promptTokens + completionTokens
+				}
 				s.routeService.LogRequest(model, route.ID, promptTokens, completionTokens, totalTokens, true, "")
 			}
 		}

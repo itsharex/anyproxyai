@@ -140,7 +140,9 @@
     "totalUsage": "总用量",
     "period": "周期",
     "successCount": "成功",
-    "failCount": "失败"
+    "failCount": "失败",
+    "hourly": "小时汇总",
+    "realtime": "实时"
   },
   "settings": {
     "title": "应用设置",

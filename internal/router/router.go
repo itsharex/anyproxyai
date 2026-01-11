@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,39 @@ import (
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 )
+
+// sendStreamError 发送流式错误响应给客户端
+// 支持 OpenAI SSE 格式和 Claude SSE 格式
+func sendStreamError(c *gin.Context, flusher http.Flusher, err error, format string) {
+	errMsg := err.Error()
+
+	if format == "claude" || format == "anthropic" {
+		// Claude 格式的错误响应
+		errorResp := map[string]interface{}{
+			"type": "error",
+			"error": map[string]interface{}{
+				"type":    "api_error",
+				"message": errMsg,
+			},
+		}
+		data, _ := json.Marshal(errorResp)
+		fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", string(data))
+	} else {
+		// OpenAI 格式的错误响应
+		errorResp := map[string]interface{}{
+			"error": map[string]interface{}{
+				"message": errMsg,
+				"type":    "proxy_error",
+			},
+		}
+		data, _ := json.Marshal(errorResp)
+		fmt.Fprintf(c.Writer, "data: %s\n\n", string(data))
+	}
+
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
 
 func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, proxyService *service.ProxyService) *gin.Engine {
 	r := gin.New()
@@ -216,6 +250,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyAnthropicStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "claude")
 						}
 						return
 					}
@@ -328,6 +363,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyClaudeCodeStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Claude Code stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "claude")
 						}
 						return
 					}
@@ -439,6 +475,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyCursorStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Cursor stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "openai")
 						}
 						return
 					}
@@ -553,6 +590,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyGeminiStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Gemini stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "openai")
 						}
 						return
 					}
@@ -628,6 +666,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 					err := proxyService.ProxyGeminiStreamRequest(body, headers, c.Writer, flusher)
 					if err != nil {
 						log.Errorf("Gemini stream proxy error: %v", err)
+						sendStreamError(c, flusher, err, "openai")
 					}
 					return
 				}
@@ -701,6 +740,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 					err := proxyService.ProxyGeminiStreamRequest(body, headers, c.Writer, flusher)
 					if err != nil {
 						log.Errorf("Gemini stream proxy error: %v", err)
+						sendStreamError(c, flusher, err, "openai")
 					}
 					return
 				}
@@ -809,6 +849,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "openai")
 						}
 						return
 					}
@@ -968,6 +1009,7 @@ func SetupAPIRouter(cfg *config.Config, routeService *service.RouteService, prox
 						err := proxyService.ProxyGeminiStreamRequest(body, headers, c.Writer, flusher)
 						if err != nil {
 							log.Errorf("Gemini stream proxy error: %v", err)
+							sendStreamError(c, flusher, err, "openai")
 						}
 						return
 					}

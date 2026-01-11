@@ -399,6 +399,8 @@ func (s *RouteService) GetHourlyStats() ([]map[string]interface{}, error) {
 		SELECT
 			CAST(substr(created_at, 12, 2) AS INTEGER) as hour,
 			COUNT(*) as requests,
+			COALESCE(SUM(request_tokens), 0) as request_tokens,
+			COALESCE(SUM(response_tokens), 0) as response_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens
 		FROM request_logs
 		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
@@ -415,21 +417,69 @@ func (s *RouteService) GetHourlyStats() ([]map[string]interface{}, error) {
 
 	var stats []map[string]interface{}
 	for rows.Next() {
-		var hour, requests, totalTokens int
-		err := rows.Scan(&hour, &requests, &totalTokens)
+		var hour, requests, requestTokens, responseTokens, totalTokens int
+		err := rows.Scan(&hour, &requests, &requestTokens, &responseTokens, &totalTokens)
 		if err != nil {
 			log.Errorf("GetHourlyStats scan error: %v", err)
 			return nil, err
 		}
 
 		stats = append(stats, map[string]interface{}{
-			"hour":         hour,
-			"requests":     requests,
-			"total_tokens": totalTokens,
+			"hour":            hour,
+			"requests":        requests,
+			"request_tokens":  requestTokens,
+			"response_tokens": responseTokens,
+			"total_tokens":    totalTokens,
 		})
 	}
 
 	log.Infof("GetHourlyStats: loaded %d hours of data", len(stats))
+	return stats, nil
+}
+
+// GetSecondlyStats 获取今日秒级统计
+func (s *RouteService) GetSecondlyStats(minutes int) ([]map[string]interface{}, error) {
+	// 获取今日全天的秒级数据
+	query := `
+		SELECT
+			created_at as timestamp,
+			COUNT(*) as requests,
+			COALESCE(SUM(request_tokens), 0) as request_tokens,
+			COALESCE(SUM(response_tokens), 0) as response_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens
+		FROM request_logs
+		WHERE substr(created_at, 1, 10) = date('now', 'localtime')
+		GROUP BY substr(created_at, 1, 19)
+		ORDER BY timestamp
+	`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		log.Errorf("GetSecondlyStats query error: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []map[string]interface{}
+	for rows.Next() {
+		var timestamp string
+		var requests, requestTokens, responseTokens, totalTokens int
+		err := rows.Scan(&timestamp, &requests, &requestTokens, &responseTokens, &totalTokens)
+		if err != nil {
+			log.Errorf("GetSecondlyStats scan error: %v", err)
+			return nil, err
+		}
+
+		stats = append(stats, map[string]interface{}{
+			"timestamp":       timestamp,
+			"requests":        requests,
+			"request_tokens":  requestTokens,
+			"response_tokens": responseTokens,
+			"total_tokens":    totalTokens,
+		})
+	}
+
+	log.Infof("GetSecondlyStats: loaded %d records for today", len(stats))
 	return stats, nil
 }
 

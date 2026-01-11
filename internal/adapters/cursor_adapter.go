@@ -4,10 +4,49 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+// 全局 thought signature 存储
+// 用于在流式响应和后续请求之间传递签名
+var (
+	globalThoughtSignature string
+	thoughtSignatureMutex  sync.RWMutex
+)
+
+// StoreThoughtSignature 存储 thought signature
+func StoreThoughtSignature(sig string) {
+	if sig == "" {
+		return
+	}
+	thoughtSignatureMutex.Lock()
+	defer thoughtSignatureMutex.Unlock()
+	// 只有新签名更长时才更新（避免短签名覆盖有效签名）
+	if globalThoughtSignature == "" || len(sig) > len(globalThoughtSignature) {
+		log.Debugf("[ThoughtSig] Storing new signature (length: %d)", len(sig))
+		globalThoughtSignature = sig
+	}
+}
+
+// GetThoughtSignature 获取存储的 thought signature
+func GetThoughtSignature() string {
+	thoughtSignatureMutex.RLock()
+	defer thoughtSignatureMutex.RUnlock()
+	return globalThoughtSignature
+}
+
+// ClearThoughtSignature 清除存储的 thought signature
+func ClearThoughtSignature() {
+	thoughtSignatureMutex.Lock()
+	defer thoughtSignatureMutex.Unlock()
+	globalThoughtSignature = ""
+}
+
+// MinSignatureLength 有效签名的最小长度
+const MinSignatureLength = 50
 
 // CursorAdapter 处理 Cursor IDE 的特殊格式
 // Cursor 使用 OpenAI 接口但 tools 和 messages 格式类似 Anthropic/Claude
@@ -15,6 +54,7 @@ import (
 // 1. Tool 定义使用扁平格式 {name, description, input_schema} 而非 OpenAI 的嵌套格式
 // 2. Tool calls 在 assistant 消息的 content 数组中作为 tool_use 块
 // 3. Tool results 在 user 消息的 content 数组中作为 tool_result 块
+// 4. Thinking/reasoning 内容需要特殊处理
 type CursorAdapter struct{}
 
 func init() {
@@ -132,7 +172,7 @@ func (a *CursorAdapter) convertTools(tools []interface{}) []interface{} {
 	return openaiTools
 }
 
-// convertMessages 转换消息，处理 Cursor 的 tool_use 和 tool_result 格式
+// convertMessages 转换消息，处理 Cursor 的 tool_use、tool_result 和 thinking 格式
 func (a *CursorAdapter) convertMessages(messages []interface{}) []interface{} {
 	openaiMessages := make([]interface{}, 0, len(messages))
 
@@ -177,17 +217,32 @@ func (a *CursorAdapter) convertMessages(messages []interface{}) []interface{} {
 				if contentStr := extractTextContent(content); contentStr != "" {
 					assistantMsg["content"] = contentStr
 				}
+				// 保留 reasoning_content
+				if reasoningContent, ok := msgMap["reasoning_content"].(string); ok && reasoningContent != "" {
+					assistantMsg["reasoning_content"] = reasoningContent
+				}
 				openaiMessages = append(openaiMessages, assistantMsg)
 			} else if contentArr, isArray := content.([]interface{}); isArray {
-				// Cursor/Anthropic 格式：content 数组中包含 tool_use 块
+				// Cursor/Anthropic 格式：content 数组中包含 tool_use/thinking 块
 				assistantMsg := a.convertAssistantMessage(contentArr)
+				// 保留原始的 reasoning_content（如果有）
+				if reasoningContent, ok := msgMap["reasoning_content"].(string); ok && reasoningContent != "" {
+					if _, hasReasoning := assistantMsg["reasoning_content"]; !hasReasoning {
+						assistantMsg["reasoning_content"] = reasoningContent
+					}
+				}
 				openaiMessages = append(openaiMessages, assistantMsg)
 			} else {
 				// 普通文本消息
-				openaiMessages = append(openaiMessages, map[string]interface{}{
+				assistantMsg := map[string]interface{}{
 					"role":    "assistant",
 					"content": extractTextContent(content),
-				})
+				}
+				// 保留 reasoning_content
+				if reasoningContent, ok := msgMap["reasoning_content"].(string); ok && reasoningContent != "" {
+					assistantMsg["reasoning_content"] = reasoningContent
+				}
+				openaiMessages = append(openaiMessages, assistantMsg)
 			}
 
 		case "tool":
@@ -253,13 +308,14 @@ func (a *CursorAdapter) convertUserMessage(contentArr []interface{}) []interface
 	return result
 }
 
-// convertAssistantMessage 转换包含 tool_use 的助手消息
+// convertAssistantMessage 转换包含 tool_use 和 thinking 的助手消息
 func (a *CursorAdapter) convertAssistantMessage(contentArr []interface{}) map[string]interface{} {
 	assistantMsg := map[string]interface{}{
 		"role": "assistant",
 	}
 
 	var textParts []string
+	var thinkingParts []string
 	var toolCalls []interface{}
 
 	for _, block := range contentArr {
@@ -295,6 +351,17 @@ func (a *CursorAdapter) convertAssistantMessage(contentArr []interface{}) map[st
 			})
 			log.Debugf("[Cursor] Converted tool_use: %s -> %s", id, name)
 
+		case "thinking":
+			// 提取 thinking 内容
+			if thinking, ok := blockMap["thinking"].(string); ok && thinking != "" {
+				thinkingParts = append(thinkingParts, thinking)
+			}
+			// 存储 signature 供后续使用
+			if signature, ok := blockMap["signature"].(string); ok && signature != "" {
+				StoreThoughtSignature(signature)
+			}
+			log.Debugf("[Cursor] Extracted thinking block")
+
 		case "text":
 			if text, ok := blockMap["text"].(string); ok && text != "" {
 				textParts = append(textParts, text)
@@ -310,6 +377,10 @@ func (a *CursorAdapter) convertAssistantMessage(contentArr []interface{}) map[st
 
 	if len(textParts) > 0 {
 		assistantMsg["content"] = strings.Join(textParts, "\n")
+	}
+
+	if len(thinkingParts) > 0 {
+		assistantMsg["reasoning_content"] = strings.Join(thinkingParts, "\n")
 	}
 
 	if len(toolCalls) > 0 {
@@ -354,15 +425,36 @@ func (a *CursorAdapter) convertToolChoice(toolChoice interface{}) interface{} {
 
 // AdaptResponse 将 OpenAI 响应转换为 Cursor/Anthropic 格式（如果需要）
 func (a *CursorAdapter) AdaptResponse(respData map[string]interface{}) (map[string]interface{}, error) {
-	// Cursor 使用 OpenAI 接口，响应格式保持 OpenAI 格式
-	// 不需要转换
+	// Cursor 使用 OpenAI 接口，但需要处理 reasoning_content
+	// 检查响应中是否有 reasoning_content，如果有则保留
+	if choices, ok := respData["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if message, ok := choice["message"].(map[string]interface{}); ok {
+				// 提取并存储 signature（如果有）
+				// 某些上游可能在响应中返回 signature
+				if sig, ok := message["signature"].(string); ok && sig != "" {
+					StoreThoughtSignature(sig)
+				}
+			}
+		}
+	}
 	return respData, nil
 }
 
 // AdaptStreamChunk 转换流式响应块
 func (a *CursorAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[string]interface{}, error) {
 	// Cursor 使用 OpenAI 接口，流式响应保持 OpenAI 格式
-	// 不需要转换
+	// 但需要处理 reasoning_content 和 signature
+	if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if delta, ok := choice["delta"].(map[string]interface{}); ok {
+				// 提取并存储 signature（如果有）
+				if sig, ok := delta["signature"].(string); ok && sig != "" {
+					StoreThoughtSignature(sig)
+				}
+			}
+		}
+	}
 	return chunk, nil
 }
 
@@ -552,4 +644,170 @@ func copyIfExists(src, dst map[string]interface{}, key string) {
 // generateCursorID 生成唯一 ID
 func generateCursorID() string {
 	return fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+}
+
+// HasValidSignature 检查 thinking 块是否有有效签名
+func HasValidSignature(block map[string]interface{}) bool {
+	if blockType, ok := block["type"].(string); ok && blockType != "thinking" {
+		return true // 非 thinking 块总是有效
+	}
+
+	thinking, _ := block["thinking"].(string)
+	signature, _ := block["signature"].(string)
+
+	// 空 thinking + 任意签名 = 有效
+	if thinking == "" && signature != "" {
+		return true
+	}
+
+	// 非空 thinking + 有效签名 = 有效
+	if signature != "" && len(signature) >= MinSignatureLength {
+		return true
+	}
+
+	return false
+}
+
+// FilterInvalidThinkingBlocks 过滤无效的 thinking 块
+// 返回过滤的块数量
+func FilterInvalidThinkingBlocks(messages []interface{}) int {
+	totalFiltered := 0
+	globalSig := GetThoughtSignature()
+
+	for _, msg := range messages {
+		msgMap, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msgMap["role"].(string)
+		if role != "assistant" && role != "model" {
+			continue
+		}
+
+		content, ok := msgMap["content"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		newBlocks := make([]interface{}, 0, len(content))
+		for _, block := range content {
+			blockMap, ok := block.(map[string]interface{})
+			if !ok {
+				newBlocks = append(newBlocks, block)
+				continue
+			}
+
+			blockType, _ := blockMap["type"].(string)
+			if blockType == "thinking" {
+				if HasValidSignature(blockMap) {
+					// 有效的 thinking 块 - 保留但移除 cache_control
+					cleaned := map[string]interface{}{
+						"type":     "thinking",
+						"thinking": blockMap["thinking"],
+					}
+					if sig, ok := blockMap["signature"].(string); ok && sig != "" {
+						cleaned["signature"] = sig
+					}
+					newBlocks = append(newBlocks, cleaned)
+				} else if globalSig != "" && len(globalSig) >= MinSignatureLength {
+					// 无效签名但有全局签名 - 修复
+					thinkingText, _ := blockMap["thinking"].(string)
+					log.Debugf("[Thinking-Filter] Repairing thinking block with global signature (len=%d)", len(thinkingText))
+					newBlocks = append(newBlocks, map[string]interface{}{
+						"type":      "thinking",
+						"thinking":  thinkingText,
+						"signature": globalSig,
+					})
+				} else {
+					// 无效签名 - 转换为 text 或丢弃
+					thinkingText, _ := blockMap["thinking"].(string)
+					if strings.TrimSpace(thinkingText) != "" {
+						log.Debugf("[Thinking-Filter] Converting thinking block with invalid signature to text (len=%d)", len(thinkingText))
+						newBlocks = append(newBlocks, map[string]interface{}{
+							"type": "text",
+							"text": thinkingText,
+						})
+					} else {
+						log.Debugf("[Thinking-Filter] Dropping empty thinking block with invalid signature")
+					}
+					totalFiltered++
+				}
+			} else {
+				// 非 thinking 块 - 保留但移除 cache_control
+				cleanedBlock := make(map[string]interface{})
+				for k, v := range blockMap {
+					if k != "cache_control" {
+						cleanedBlock[k] = v
+					}
+				}
+				newBlocks = append(newBlocks, cleanedBlock)
+			}
+		}
+
+		// 确保消息至少有一个块
+		if len(newBlocks) == 0 {
+			newBlocks = append(newBlocks, map[string]interface{}{
+				"type": "text",
+				"text": "",
+			})
+		}
+
+		msgMap["content"] = newBlocks
+	}
+
+	if totalFiltered > 0 {
+		log.Infof("[Thinking-Filter] Filtered %d invalid thinking block(s)", totalFiltered)
+	}
+
+	return totalFiltered
+}
+
+// ShouldDisableThinkingDueToHistory 检查是否因历史不兼容而需要禁用 thinking
+func ShouldDisableThinkingDueToHistory(messages []interface{}) bool {
+	// 从后向前查找最后一个 assistant 消息
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg, ok := messages[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		role, _ := msg["role"].(string)
+		if role != "assistant" && role != "model" {
+			continue
+		}
+
+		content, ok := msg["content"].([]interface{})
+		if !ok {
+			return false
+		}
+
+		hasToolUse := false
+		hasThinking := false
+
+		for _, block := range content {
+			blockMap, ok := block.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			blockType, _ := blockMap["type"].(string)
+			if blockType == "tool_use" {
+				hasToolUse = true
+			}
+			if blockType == "thinking" {
+				hasThinking = true
+			}
+		}
+
+		// Tool use 但没有 thinking = 不兼容
+		if hasToolUse && !hasThinking {
+			log.Infof("[Thinking-Mode] Detected ToolUse without Thinking in history. Disabling thinking.")
+			return true
+		}
+
+		// 只检查最近的 assistant 消息
+		return false
+	}
+
+	return false
 }

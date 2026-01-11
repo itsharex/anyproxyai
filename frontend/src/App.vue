@@ -482,7 +482,9 @@
                   :style="{ left: heatmapTooltip.x + 'px', top: heatmapTooltip.y + 'px' }"
                 >
                   <div style="font-weight: bold;">{{ t('stats.date') }}: {{ heatmapTooltip.date }}</div>
-                  <div>{{ t('stats.tokens') }}: {{ formatNumber(heatmapTooltip.tokens) }}</div>
+                  <div>{{ t('stats.inputTokens') }}: {{ formatNumber(heatmapTooltip.requestTokens) }}</div>
+                  <div>{{ t('stats.outputTokens') }}: {{ formatNumber(heatmapTooltip.responseTokens) }}</div>
+                  <div>{{ t('stats.totalTokensCol') }}: {{ formatNumber(heatmapTooltip.tokens) }}</div>
                   <div>{{ t('stats.requestCount') }}: {{ heatmapTooltip.requests }}</div>
                 </div>
                 <div class="heatmap-legend">
@@ -583,7 +585,7 @@
 
                   <n-space align="center">
                     <n-icon size="20"><InformationCircleIcon /></n-icon>
-                    <n-text>{{ t('settings.version') }}: v2.0.5</n-text>
+                    <n-text>{{ t('settings.version') }}: v2.0.6</n-text>
                   </n-space>
 
                   <n-space align="center">
@@ -893,6 +895,7 @@ const refreshAll = async () => {
       loadConfig(),
       loadDailyStats(),
       loadHourlyStats(),
+      loadSecondlyStats(),
       loadModelRanking(),
       loadUsageSummary()
     ])
@@ -1059,6 +1062,8 @@ const heatmapTooltip = ref({
   y: 0,
   date: '',
   tokens: 0,
+  requestTokens: 0,
+  responseTokens: 0,
   requests: 0
 })
 
@@ -1071,6 +1076,8 @@ const showHeatmapTooltip = (event, day) => {
     y: rect.top,
     date: day.date,
     tokens: day.tokens,
+    requestTokens: day.requestTokens || 0,
+    responseTokens: day.responseTokens || 0,
     requests: day.requests
   }
 }
@@ -1086,6 +1093,8 @@ const generateHeatmapData = (dailyStats) => {
     dailyStats.forEach(stat => {
       statsMap[stat.date] = {
         tokens: stat.total_tokens || 0,
+        requestTokens: stat.request_tokens || 0,
+        responseTokens: stat.response_tokens || 0,
         requests: stat.requests || 0
       }
     })
@@ -1109,10 +1118,12 @@ const generateHeatmapData = (dailyStats) => {
       const month = String(date.getMonth() + 1).padStart(2, '0')
       const day = String(date.getDate()).padStart(2, '0')
       const dateStr = `${year}-${month}-${day}`
-      const stat = statsMap[dateStr] || { tokens: 0, requests: 0 }
+      const stat = statsMap[dateStr] || { tokens: 0, requestTokens: 0, responseTokens: 0, requests: 0 }
       week.push({
         date: dateStr,
         tokens: stat.tokens,
+        requestTokens: stat.requestTokens,
+        responseTokens: stat.responseTokens,
         requests: stat.requests
       })
     }
@@ -1174,29 +1185,82 @@ const getHeatmapClass = (tokens) => {
 // 今日按小时统计数据
 const hourlyStatsData = ref([])
 
-// 今日折线图配置
+// 秒级统计数据（今日全天）
+const secondlyStatsData = ref([])
+
+// 今日折线图配置（24小时 + 秒级数据点）
 const todayChartOption = computed(() => {
-  // 生成24小时的数据（填充空白小时）
-  const hourlyTokensMap = {}
-  const hourlyRequestsMap = {}
+  // 生成24小时的基础数据（填充空白小时为0）
+  const hourlyMap = {}
   hourlyStatsData.value.forEach(stat => {
-    hourlyTokensMap[stat.hour] = stat.total_tokens || 0
-    hourlyRequestsMap[stat.hour] = stat.requests || 0
+    hourlyMap[stat.hour] = {
+      request_tokens: stat.request_tokens || 0,
+      response_tokens: stat.response_tokens || 0,
+      requests: stat.requests || 0
+    }
   })
 
-  const hours = Array.from({ length: 24 }, (_, i) => `${i}:00`)
-  const tokensData = Array.from({ length: 24 }, (_, i) => hourlyTokensMap[i] || 0)
-  const requestsData = Array.from({ length: 24 }, (_, i) => hourlyRequestsMap[i] || 0)
+  // 24小时标签
+  const hours = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
+  
+  // 24小时汇总数据（没有数据的小时为0）
+  const hourlyRequestTokens = Array.from({ length: 24 }, (_, i) => hourlyMap[i]?.request_tokens || 0)
+  const hourlyResponseTokens = Array.from({ length: 24 }, (_, i) => hourlyMap[i]?.response_tokens || 0)
+  const hourlyRequests = Array.from({ length: 24 }, (_, i) => hourlyMap[i]?.requests || 0)
+
+  // 处理秒级数据，转换为散点图数据（显示在对应小时位置）
+  const secondlyData = secondlyStatsData.value || []
+  const scatterRequestTokens = []
+  const scatterResponseTokens = []
+  const scatterRequests = []
+
+  secondlyData.forEach(stat => {
+    const ts = stat.timestamp || ''
+    if (ts.length >= 19) {
+      const hour = parseInt(ts.substring(11, 13), 10)
+      const minute = parseInt(ts.substring(14, 16), 10)
+      const second = parseInt(ts.substring(17, 19), 10)
+      // 计算在X轴上的精确位置（小时 + 分钟/60 + 秒/3600）
+      const xPos = hour + minute / 60 + second / 3600
+      const timeLabel = ts.substring(11, 19)
+      
+      scatterRequestTokens.push({
+        value: [xPos, stat.request_tokens || 0],
+        time: timeLabel
+      })
+      scatterResponseTokens.push({
+        value: [xPos, stat.response_tokens || 0],
+        time: timeLabel
+      })
+      scatterRequests.push({
+        value: [xPos, stat.requests || 0],
+        time: timeLabel
+      })
+    }
+  })
 
   return {
     tooltip: {
       trigger: 'axis',
+      axisPointer: {
+        type: 'cross'
+      },
       formatter: function(params) {
-        let result = params[0].axisValue + '<br/>'
+        if (!params || params.length === 0) return ''
+        
+        let result = ''
+        // 检查是否是散点数据
+        const firstParam = params[0]
+        if (firstParam.componentType === 'series' && firstParam.data && firstParam.data.time) {
+          result = firstParam.data.time + '<br/>'
+        } else {
+          result = firstParam.axisValue + '<br/>'
+        }
+        
         params.forEach(param => {
+          let value = param.data?.value?.[1] ?? param.value
           // 对 Token 数量进行格式化
-          let value = param.value
-          if (param.seriesIndex === 0) { // Token 系列
+          if (param.seriesName.includes('Token') || param.seriesName.includes('token')) {
             if (value >= 1000000) {
               value = (value / 1000000).toFixed(1) + 'M'
             } else if (value >= 1000) {
@@ -1209,21 +1273,34 @@ const todayChartOption = computed(() => {
       }
     },
     legend: {
-      data: [t('stats.tokens'), t('stats.requestCount')],
+      data: [
+        t('stats.inputTokens') + '(' + t('stats.hourly') + ')',
+        t('stats.outputTokens') + '(' + t('stats.hourly') + ')',
+        t('stats.requestCount') + '(' + t('stats.hourly') + ')',
+        t('stats.inputTokens') + '(' + t('stats.realtime') + ')',
+        t('stats.outputTokens') + '(' + t('stats.realtime') + ')',
+        t('stats.requestCount') + '(' + t('stats.realtime') + ')'
+      ],
       textStyle: {
         color: isDark.value ? '#fff' : '#333'
-      }
+      },
+      type: 'scroll',
+      bottom: 0
     },
     grid: {
       left: '3%',
       right: '4%',
-      bottom: '3%',
+      bottom: '15%',
+      top: '15%',
       containLabel: true
     },
     xAxis: {
       type: 'category',
       boundaryGap: false,
-      data: hours
+      data: hours,
+      axisLabel: {
+        interval: 1
+      }
     },
     yAxis: [
       {
@@ -1248,33 +1325,87 @@ const todayChartOption = computed(() => {
       }
     ],
     series: [
+      // 小时汇总折线图
       {
-        name: t('stats.tokens'),
+        name: t('stats.inputTokens') + '(' + t('stats.hourly') + ')',
         type: 'line',
         smooth: true,
-        data: tokensData,
+        data: hourlyRequestTokens,
         yAxisIndex: 0,
         areaStyle: {
           color: isDark.value ? 'rgba(24, 160, 88, 0.1)' : 'rgba(24, 160, 88, 0.2)'
         },
         lineStyle: {
-          color: '#18a058'
+          color: '#18a058',
+          width: 2
         },
         itemStyle: {
           color: '#18a058'
         }
       },
       {
-        name: t('stats.requestCount'),
+        name: t('stats.outputTokens') + '(' + t('stats.hourly') + ')',
         type: 'line',
         smooth: true,
-        data: requestsData,
+        data: hourlyResponseTokens,
+        yAxisIndex: 0,
+        areaStyle: {
+          color: isDark.value ? 'rgba(99, 125, 255, 0.1)' : 'rgba(99, 125, 255, 0.2)'
+        },
+        lineStyle: {
+          color: '#637dff',
+          width: 2
+        },
+        itemStyle: {
+          color: '#637dff'
+        }
+      },
+      {
+        name: t('stats.requestCount') + '(' + t('stats.hourly') + ')',
+        type: 'line',
+        smooth: true,
+        data: hourlyRequests,
         yAxisIndex: 1,
         lineStyle: {
-          color: '#f0a020'
+          color: '#f0a020',
+          width: 2
         },
         itemStyle: {
           color: '#f0a020'
+        }
+      },
+      // 秒级散点图
+      {
+        name: t('stats.inputTokens') + '(' + t('stats.realtime') + ')',
+        type: 'scatter',
+        data: scatterRequestTokens,
+        yAxisIndex: 0,
+        symbolSize: 6,
+        itemStyle: {
+          color: '#18a058',
+          opacity: 0.7
+        }
+      },
+      {
+        name: t('stats.outputTokens') + '(' + t('stats.realtime') + ')',
+        type: 'scatter',
+        data: scatterResponseTokens,
+        yAxisIndex: 0,
+        symbolSize: 6,
+        itemStyle: {
+          color: '#637dff',
+          opacity: 0.7
+        }
+      },
+      {
+        name: t('stats.requestCount') + '(' + t('stats.realtime') + ')',
+        type: 'scatter',
+        data: scatterRequests,
+        yAxisIndex: 1,
+        symbolSize: 6,
+        itemStyle: {
+          color: '#f0a020',
+          opacity: 0.7
         }
       }
     ]
@@ -1292,7 +1423,7 @@ const usageSummary = ref({
 })
 
 const rankingColumns = computed(() => [
-  { title: t('stats.rank'), key: 'rank', width: 80 },
+  { title: t('stats.rank'), key: 'rank', width: 60 },
   {
     title: t('stats.model'),
     key: 'model',
@@ -1300,10 +1431,27 @@ const rankingColumns = computed(() => [
       return h(NTag, { type: 'info', size: 'small' }, { default: () => row.model })
     }
   },
-  { title: t('stats.requests'), key: 'requests' },
+  { title: t('stats.requests'), key: 'requests', width: 80 },
+  {
+    title: t('stats.inputTokens'),
+    key: 'request_tokens',
+    width: 100,
+    render(row) {
+      return formatNumber(row.request_tokens || 0)
+    }
+  },
+  {
+    title: t('stats.outputTokens'),
+    key: 'response_tokens',
+    width: 100,
+    render(row) {
+      return formatNumber(row.response_tokens || 0)
+    }
+  },
   {
     title: t('stats.totalTokensCol'),
     key: 'total_tokens',
+    width: 100,
     render(row) {
       return formatNumber(row.total_tokens || 0)
     }
@@ -1311,6 +1459,7 @@ const rankingColumns = computed(() => [
   {
     title: t('stats.successRate'),
     key: 'success_rate',
+    width: 80,
     render(row) {
       return `${row.success_rate || 0}%`
     }
@@ -1634,6 +1783,20 @@ const loadHourlyStats = async () => {
   }
 }
 
+// 加载秒级统计（用于实时折线图）
+const loadSecondlyStats = async () => {
+  try {
+    if (!window.go || !window.go.main || !window.go.main.App) {
+      return
+    }
+    // 获取最近60分钟的秒级数据
+    const data = await window.go.main.App.GetSecondlyStats(60)
+    secondlyStatsData.value = data || []
+  } catch (error) {
+    console.error('加载秒级统计失败:', error)
+  }
+}
+
 // 加载模型使用排行
 const loadModelRanking = async () => {
   try {
@@ -1846,6 +2009,7 @@ const confirmClearStats = async () => {
     await loadStats()
     await loadDailyStats()
     await loadHourlyStats()
+    await loadSecondlyStats()
     await loadModelRanking()
   } catch (error) {
     showMessage("error", t('stats.clearFailed') + ': ' + error)
@@ -1924,8 +2088,14 @@ onMounted(async () => {
   loadConfig()
   loadDailyStats()
   loadHourlyStats()
+  loadSecondlyStats()
   loadModelRanking()
   loadUsageSummary()
+
+  // 每 10 秒刷新一次秒级统计（实时数据）
+  setInterval(() => {
+    loadSecondlyStats()
+  }, 10000)
 
   // 每 30 秒刷新一次统计
   setInterval(() => {
