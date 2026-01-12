@@ -8,7 +8,11 @@ import (
 )
 
 // ClaudeToOpenAIAdapter 将 Claude (Anthropic) 格式转换为 OpenAI 格式
-type ClaudeToOpenAIAdapter struct{}
+type ClaudeToOpenAIAdapter struct {
+	// 用于在流式响应中跟踪当前的 tool_use ID 和名称
+	currentToolCallID   string // 当前正在处理的 tool_use ID
+	currentToolCallName string // 当前正在处理的 tool_use name
+}
 
 func init() {
 	RegisterAdapter("claude-to-openai", &ClaudeToOpenAIAdapter{})
@@ -513,6 +517,7 @@ func (a *ClaudeToOpenAIAdapter) AdaptResponse(respData map[string]interface{}) (
 }
 
 // AdaptStreamChunk 转换流式响应块 - Claude SSE → OpenAI SSE
+// 支持：text_delta, thinking_delta, input_json_delta (tool_use)
 func (a *ClaudeToOpenAIAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[string]interface{}, error) {
 	chunkType, _ := chunk["type"].(string)
 
@@ -522,16 +527,58 @@ func (a *ClaudeToOpenAIAdapter) AdaptStreamChunk(chunk map[string]interface{}) (
 		return nil, nil
 
 	case "content_block_start":
-		// 跳过 content_block_start 事件
+		// 检查 content_block 类型
+		if contentBlock, ok := chunk["content_block"].(map[string]interface{}); ok {
+			blockType, _ := contentBlock["type"].(string)
+
+			switch blockType {
+			case "tool_use":
+				// 保存 tool_use 信息到适配器状态，用于后续的 input_json_delta 事件
+				// 注意：Claude 流式响应中，id 和 name 在 content_block_start 事件中提供
+				// 但 input_json_delta 事件不包含这些信息，需要从适配器状态中获取
+				if id, ok := contentBlock["id"].(string); ok {
+					a.currentToolCallID = id
+				}
+				if name, ok := contentBlock["name"].(string); ok {
+					a.currentToolCallName = name
+				}
+				// 对于 tool_use 类型，返回 nil 以等待 input_json_delta 事件
+				return nil, nil
+			case "thinking":
+				// thinking 不需要特殊处理
+			case "text":
+				// text 不需要特殊处理
+			}
+		}
 		return nil, nil
 
 	case "content_block_delta":
-		// 提取文本内容并转换为 OpenAI 格式
+		// 提取并转换不同类型的 delta
 		if delta, ok := chunk["delta"].(map[string]interface{}); ok {
 			deltaType, _ := delta["type"].(string)
-			if deltaType == "text_delta" {
+
+			switch deltaType {
+			case "text_delta":
+				// 普通文本
 				if text, ok := delta["text"].(string); ok {
-					// 构建 OpenAI 格式的流式响应
+					return map[string]interface{}{
+						"id":      "chatcmpl-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+						"object":  "chat.completion.chunk",
+						"created": time.Now().Unix(),
+						"model":   "claude",
+						"choices": []interface{}{
+							map[string]interface{}{
+								"index":         0,
+								"delta":         map[string]interface{}{"content": text},
+								"finish_reason": nil,
+							},
+						},
+					}, nil
+				}
+
+			case "thinking_delta":
+				// Thinking 推理内容 → 转换为 OpenAI 的 reasoning_content
+				if thinking, ok := delta["thinking"].(string); ok {
 					return map[string]interface{}{
 						"id":      "chatcmpl-" + fmt.Sprintf("%d", time.Now().UnixNano()),
 						"object":  "chat.completion.chunk",
@@ -541,19 +588,25 @@ func (a *ClaudeToOpenAIAdapter) AdaptStreamChunk(chunk map[string]interface{}) (
 							map[string]interface{}{
 								"index": 0,
 								"delta": map[string]interface{}{
-									"content": text,
+									"reasoning_content": thinking,
 								},
 								"finish_reason": nil,
 							},
 						},
 					}, nil
 				}
+
+			case "input_json_delta":
+				// Tool Use 参数 → 转换为 OpenAI 的 tool_calls
+				// 注意：OpenAI 流式发送 tool_calls 是分片的
+				// 这里需要调用辅助方法处理
+				return a.adaptToolUseDelta(delta, chunk), nil
 			}
 		}
 		return nil, nil
 
 	case "content_block_stop":
-		// 跳过 content_block_stop 事件
+		// 不需要发送 block stop 事件
 		return nil, nil
 
 	case "message_delta":
@@ -565,6 +618,10 @@ func (a *ClaudeToOpenAIAdapter) AdaptStreamChunk(chunk map[string]interface{}) (
 			openaiStopReason := "stop"
 			if stopReason == "max_tokens" {
 				openaiStopReason = "length"
+			}
+			// tool_use 也映射为 tool_calls
+			if stopReason == "tool_use" {
+				openaiStopReason = "tool_calls"
 			}
 
 			return map[string]interface{}{
@@ -603,4 +660,51 @@ func (a *ClaudeToOpenAIAdapter) AdaptStreamStart(model string) []map[string]inte
 func (a *ClaudeToOpenAIAdapter) AdaptStreamEnd() []map[string]interface{} {
 	// 不需要额外的结束消息
 	return nil
+}
+
+// adaptToolUseDelta 处理 Claude tool_use 的 input_json_delta 并转换为 OpenAI 格式
+func (a *ClaudeToOpenAIAdapter) adaptToolUseDelta(delta map[string]interface{}, chunk map[string]interface{}) map[string]interface{} {
+	// 从 content_block 中提取 tool_use 信息
+	index, _ := chunk["index"].(float64)
+
+	// 从适配器状态中获取当前 tool_use 的 ID 和 name
+	toolID := a.currentToolCallID
+	toolName := a.currentToolCallName
+
+	// 提取 partial_json
+	partialJSON, _ := delta["partial_json"].(string)
+
+	// 构建 OpenAI 格式的 tool_calls delta
+	toolCallDelta := map[string]interface{}{
+		"index": int(index),
+	}
+
+	// 如果有 toolID，添加 id 字段
+	if toolID != "" {
+		toolCallDelta["id"] = toolID
+	}
+
+	toolCallDelta["type"] = "function"
+	toolCallDelta["function"] = map[string]interface{}{
+		"arguments": partialJSON,
+	}
+
+	// 如果有 toolName，添加 name 到 function 中
+	if toolName != "" {
+		toolCallDelta["function"].(map[string]interface{})["name"] = toolName
+	}
+
+	return map[string]interface{}{
+		"id":      "chatcmpl-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
+		"model":   "claude",
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index":         int(index),
+				"delta":         map[string]interface{}{"tool_calls": []interface{}{toolCallDelta}},
+				"finish_reason": nil,
+			},
+		},
+	}
 }

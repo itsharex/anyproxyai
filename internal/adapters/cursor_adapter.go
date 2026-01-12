@@ -4,46 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
-
-// 全局 thought signature 存储
-// 用于在流式响应和后续请求之间传递签名
-var (
-	globalThoughtSignature string
-	thoughtSignatureMutex  sync.RWMutex
-)
-
-// StoreThoughtSignature 存储 thought signature
-func StoreThoughtSignature(sig string) {
-	if sig == "" {
-		return
-	}
-	thoughtSignatureMutex.Lock()
-	defer thoughtSignatureMutex.Unlock()
-	// 只有新签名更长时才更新（避免短签名覆盖有效签名）
-	if globalThoughtSignature == "" || len(sig) > len(globalThoughtSignature) {
-		log.Debugf("[ThoughtSig] Storing new signature (length: %d)", len(sig))
-		globalThoughtSignature = sig
-	}
-}
-
-// GetThoughtSignature 获取存储的 thought signature
-func GetThoughtSignature() string {
-	thoughtSignatureMutex.RLock()
-	defer thoughtSignatureMutex.RUnlock()
-	return globalThoughtSignature
-}
-
-// ClearThoughtSignature 清除存储的 thought signature
-func ClearThoughtSignature() {
-	thoughtSignatureMutex.Lock()
-	defer thoughtSignatureMutex.Unlock()
-	globalThoughtSignature = ""
-}
 
 // MinSignatureLength 有效签名的最小长度
 const MinSignatureLength = 50
@@ -55,11 +19,23 @@ const MinSignatureLength = 50
 // 2. Tool calls 在 assistant 消息的 content 数组中作为 tool_use 块
 // 3. Tool results 在 user 消息的 content 数组中作为 tool_result 块
 // 4. Thinking/reasoning 内容需要特殊处理
-type CursorAdapter struct{}
+type CursorAdapter struct {
+	currentSessionID string // 当前请求的会话ID
+}
 
 func init() {
 	RegisterAdapter("cursor", &CursorAdapter{})
 	RegisterAdapter("cursor-to-openai", &CursorAdapter{})
+}
+
+// NewCursorAdapter 创建新的 Cursor 适配器
+func NewCursorAdapter() *CursorAdapter {
+	return &CursorAdapter{}
+}
+
+// SetSessionID 设置当前会话ID（用于流式响应）
+func (a *CursorAdapter) SetSessionID(sessionID string) {
+	a.currentSessionID = sessionID
 }
 
 // AdaptRequest 将 Cursor 格式请求转换为标准 OpenAI 格式
@@ -69,18 +45,40 @@ func (a *CursorAdapter) AdaptRequest(reqData map[string]interface{}, model strin
 	// 设置模型
 	openaiReq["model"] = model
 
+	// 生成会话ID（基于消息内容）
+	var sessionID string
+	if messages, ok := reqData["messages"].([]interface{}); ok {
+		sessionID = GenerateSessionID(messages)
+		if sessionID != "" {
+			log.Debugf("[Cursor] Generated session ID: %s", sessionID[:8])
+		}
+
+		// 获取会话签名（如果有）
+		storedSig := GetSignatureForSession(sessionID)
+		if storedSig != "" {
+			log.Debugf("[Cursor] Using stored signature for session %s (len=%d)", sessionID[:8], len(storedSig))
+		}
+
+		// 过滤无效的 thinking 块（使用会话签名）
+		filtered := FilterInvalidThinkingBlocksWithSession(messages, sessionID)
+		if filtered > 0 {
+			log.Infof("[Cursor] Filtered %d invalid thinking block(s) in session %s", filtered, sessionID[:8])
+		}
+
+		// 转换消息
+		openaiMessages := a.convertMessages(messages)
+		openaiReq["messages"] = openaiMessages
+
+		// 保存会话ID到请求中（用于后续流式响应）
+		openaiReq["_session_id"] = sessionID
+	}
+
 	// 转换 tools - 处理 Cursor 扁平格式和 OpenAI 嵌套格式
 	if tools, ok := reqData["tools"].([]interface{}); ok && len(tools) > 0 {
 		openaiTools := a.convertTools(tools)
 		if len(openaiTools) > 0 {
 			openaiReq["tools"] = openaiTools
 		}
-	}
-
-	// 转换 messages - 处理 Cursor 的 tool_use 和 tool_result 格式
-	if messages, ok := reqData["messages"].([]interface{}); ok {
-		openaiMessages := a.convertMessages(messages)
-		openaiReq["messages"] = openaiMessages
 	}
 
 	// 转换 tool_choice
@@ -358,7 +356,14 @@ func (a *CursorAdapter) convertAssistantMessage(contentArr []interface{}) map[st
 			}
 			// 存储 signature 供后续使用
 			if signature, ok := blockMap["signature"].(string); ok && signature != "" {
-				StoreThoughtSignature(signature)
+				// 优先存储到当前会话
+				if a.currentSessionID != "" {
+					StoreSignatureForSession(a.currentSessionID, signature)
+					log.Debugf("[Cursor] Stored signature for session %s (len=%d)", a.currentSessionID[:min(8, len(a.currentSessionID))], len(signature))
+				} else {
+					// Fallback 到全局存储
+					StoreThoughtSignature(signature)
+				}
 			}
 			log.Debugf("[Cursor] Extracted thinking block")
 
@@ -431,9 +436,12 @@ func (a *CursorAdapter) AdaptResponse(respData map[string]interface{}) (map[stri
 		if choice, ok := choices[0].(map[string]interface{}); ok {
 			if message, ok := choice["message"].(map[string]interface{}); ok {
 				// 提取并存储 signature（如果有）
-				// 某些上游可能在响应中返回 signature
 				if sig, ok := message["signature"].(string); ok && sig != "" {
-					StoreThoughtSignature(sig)
+					if a.currentSessionID != "" {
+						StoreSignatureForSession(a.currentSessionID, sig)
+					} else {
+						StoreThoughtSignature(sig)
+					}
 				}
 			}
 		}
@@ -450,7 +458,12 @@ func (a *CursorAdapter) AdaptStreamChunk(chunk map[string]interface{}) (map[stri
 			if delta, ok := choice["delta"].(map[string]interface{}); ok {
 				// 提取并存储 signature（如果有）
 				if sig, ok := delta["signature"].(string); ok && sig != "" {
-					StoreThoughtSignature(sig)
+					if a.currentSessionID != "" {
+						StoreSignatureForSession(a.currentSessionID, sig)
+						log.Debugf("[Cursor-Stream] Stored signature for session %s (len=%d)", a.currentSessionID[:min(8, len(a.currentSessionID))], len(sig))
+					} else {
+						StoreThoughtSignature(sig)
+					}
 				}
 			}
 		}
@@ -671,8 +684,19 @@ func HasValidSignature(block map[string]interface{}) bool {
 // FilterInvalidThinkingBlocks 过滤无效的 thinking 块
 // 返回过滤的块数量
 func FilterInvalidThinkingBlocks(messages []interface{}) int {
+	return FilterInvalidThinkingBlocksWithSession(messages, defaultSessionID)
+}
+
+// FilterInvalidThinkingBlocksWithSession 过滤无效的 thinking 块（使用会话签名）
+// 返回过滤的块数量
+func FilterInvalidThinkingBlocksWithSession(messages []interface{}, sessionID string) int {
 	totalFiltered := 0
-	globalSig := GetThoughtSignature()
+
+	// 优先使用会话签名，fallback 到全局签名
+	globalSig := GetSignatureForSession(sessionID)
+	if globalSig == "" {
+		globalSig = GetThoughtSignature()
+	}
 
 	for _, msg := range messages {
 		msgMap, ok := msg.(map[string]interface{})
@@ -708,12 +732,17 @@ func FilterInvalidThinkingBlocks(messages []interface{}) int {
 					}
 					if sig, ok := blockMap["signature"].(string); ok && sig != "" {
 						cleaned["signature"] = sig
+
+						// 存储到会话（如果有会话ID）
+						if sessionID != "" && sessionID != defaultSessionID {
+							StoreSignatureForSession(sessionID, sig)
+						}
 					}
 					newBlocks = append(newBlocks, cleaned)
 				} else if globalSig != "" && len(globalSig) >= MinSignatureLength {
-					// 无效签名但有全局签名 - 修复
+					// 无效签名但有全局/会话签名 - 修复
 					thinkingText, _ := blockMap["thinking"].(string)
-					log.Debugf("[Thinking-Filter] Repairing thinking block with global signature (len=%d)", len(thinkingText))
+					log.Debugf("[Thinking-Filter] Repairing thinking block with signature from session %s (len=%d)", sessionID[:min(8, len(sessionID))], len(thinkingText))
 					newBlocks = append(newBlocks, map[string]interface{}{
 						"type":      "thinking",
 						"thinking":  thinkingText,
@@ -761,6 +790,14 @@ func FilterInvalidThinkingBlocks(messages []interface{}) int {
 	}
 
 	return totalFiltered
+}
+
+// min 辅助函数
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ShouldDisableThinkingDueToHistory 检查是否因历史不兼容而需要禁用 thinking

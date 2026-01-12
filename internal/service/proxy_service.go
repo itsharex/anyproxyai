@@ -23,6 +23,60 @@ type ProxyService struct {
 	httpClient   *http.Client
 }
 
+// partialToolCall 用于累积流式 tool_calls 的分片数据
+type partialToolCall struct {
+	index  int
+	id     string
+	name   string
+	args   string
+	fields map[string]interface{}
+}
+
+// sendContentBlockStart 发送 Claude content_block_start 事件
+func (s *ProxyService) sendContentBlockStart(writer io.Writer, flusher http.Flusher, index int, blockType, blockID string) {
+	contentBlock := map[string]interface{}{
+		"type": blockType,
+	}
+
+	// 根据不同的块类型添加必需的字段
+	switch blockType {
+	case "thinking":
+		// thinking 块必须有 thinking 字段
+		contentBlock["thinking"] = ""
+	case "text":
+		// text 块必须有 text 字段
+		contentBlock["text"] = ""
+	case "tool_use":
+		// tool_use 块需要 id 和 name
+		if blockID != "" {
+			contentBlock["id"] = blockID
+		}
+		contentBlock["name"] = "" // name 将在后续的 delta 中填充
+		contentBlock["input"] = map[string]interface{}{}
+	}
+
+	contentBlockStart := map[string]interface{}{
+		"type":          "content_block_start",
+		"index":         index,
+		"content_block": contentBlock,
+	}
+
+	blockStartData, _ := json.Marshal(contentBlockStart)
+	fmt.Fprintf(writer, "event: content_block_start\ndata: %s\n\n", string(blockStartData))
+	flusher.Flush()
+}
+
+// sendContentBlockStop 发送 Claude content_block_stop 事件
+func (s *ProxyService) sendContentBlockStop(writer io.Writer, flusher http.Flusher, index int) {
+	contentBlockStop := map[string]interface{}{
+		"type":  "content_block_stop",
+		"index": index,
+	}
+	blockStopData, _ := json.Marshal(contentBlockStop)
+	fmt.Fprintf(writer, "event: content_block_stop\ndata: %s\n\n", string(blockStopData))
+	flusher.Flush()
+}
+
 func NewProxyService(routeService *RouteService, cfg *config.Config) *ProxyService {
 	return &ProxyService{
 		routeService: routeService,
@@ -1176,10 +1230,11 @@ func (s *ProxyService) streamDirect(reader io.Reader, writer io.Writer, flusher 
 	}
 }
 
-// streamOpenAIToClaude �?OpenAI 流式响应转换�?Claude 流式响应
-// 用于 /api/anthropic 路径，当目标�?OpenAI 格式 API �?
+// streamOpenAIToClaude 将 OpenAI 流式响应转换为 Claude 流式响应
+// 用于 /api/anthropic 路径，当目标是 OpenAI 格式 API 时
+// 支持：普通文本、thinking（reasoning_content）、tool_calls
 func (s *ProxyService) streamOpenAIToClaude(reader io.Reader, writer io.Writer, flusher http.Flusher, model string, routeID int64) error {
-	// 发�?Claude 流式响应的开始事�?
+	// 发送 Claude 流式响应的开始事件
 	messageID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
 
 	// message_start 事件
@@ -1203,24 +1258,19 @@ func (s *ProxyService) streamOpenAIToClaude(reader io.Reader, writer io.Writer, 
 	fmt.Fprintf(writer, "event: message_start\ndata: %s\n\n", string(startData))
 	flusher.Flush()
 
-	// content_block_start 事件
-	contentBlockStart := map[string]interface{}{
-		"type":  "content_block_start",
-		"index": 0,
-		"content_block": map[string]interface{}{
-			"type": "text",
-			"text": "",
-		},
-	}
-	blockStartData, _ := json.Marshal(contentBlockStart)
-	fmt.Fprintf(writer, "event: content_block_start\ndata: %s\n\n", string(blockStartData))
-	flusher.Flush()
-
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 
 	var totalPromptTokens int
 	var totalCompletionTokens int
+
+	// 用于跟踪当前 active 的 content_block 类型
+	// 可能的值: "text", "thinking", "tool_use"
+	var currentBlockType string
+	var blockIndex int
+
+	// 用于累积 tool_calls（OpenAI 流式发送 tool_calls 是分片的：先发 name，再分片发 arguments）
+	var toolCallsMap = make(map[int]*partialToolCall)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -1255,11 +1305,146 @@ func (s *ProxyService) streamOpenAIToClaude(reader io.Reader, writer io.Writer, 
 			if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 				if choice, ok := choices[0].(map[string]interface{}); ok {
 					if delta, ok := choice["delta"].(map[string]interface{}); ok {
-						if content, ok := delta["content"].(string); ok && content != "" {
-							// 发�?content_block_delta 事件
+
+						// 优先级1: 检查 reasoning_content (thinking 内容)
+						if reasoningContent, ok := delta["reasoning_content"].(string); ok && reasoningContent != "" {
+							// 如果当前不是 thinking block，先停止之前的 block
+							if currentBlockType != "" && currentBlockType != "thinking" {
+								s.sendContentBlockStop(writer, flusher, blockIndex)
+								blockIndex++
+							}
+
+							// 如果当前不是 thinking block，开始新的 thinking block
+							if currentBlockType != "thinking" {
+								s.sendContentBlockStart(writer, flusher, blockIndex, "thinking", "")
+								currentBlockType = "thinking"
+							}
+
+							// 发送 thinking delta
 							deltaEvent := map[string]interface{}{
 								"type":  "content_block_delta",
-								"index": 0,
+								"index": blockIndex,
+								"delta": map[string]interface{}{
+									"type":     "thinking_delta",
+									"thinking": reasoningContent,
+								},
+							}
+							deltaData, _ := json.Marshal(deltaEvent)
+							fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", string(deltaData))
+							flusher.Flush()
+							continue
+						}
+
+						// 优先级2: 检查 tool_calls
+						if toolCalls, ok := delta["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+							// 如果当前不是 tool_use block，先停止之前的 block
+							if currentBlockType != "" && currentBlockType != "tool_use" {
+								s.sendContentBlockStop(writer, flusher, blockIndex)
+								blockIndex++
+							}
+
+							// 处理 tool_calls
+							for _, tc := range toolCalls {
+								tcMap, ok := tc.(map[string]interface{})
+								if !ok {
+									continue
+								}
+
+								indexFloat, ok := tcMap["index"].(float64)
+								if !ok {
+									continue
+								}
+								tcIndex := int(indexFloat)
+
+								// 初始化 partial tool call
+								if toolCallsMap[tcIndex] == nil {
+									toolCallsMap[tcIndex] = &partialToolCall{
+										index:  tcIndex,
+										id:     fmt.Sprintf("toolu_%d", time.Now().UnixNano()),
+										name:   "",
+										args:   "",
+										fields: make(map[string]interface{}),
+									}
+								}
+
+								pt := toolCallsMap[tcIndex]
+
+								// 处理 tool_call.id
+								if id, ok := tcMap["id"].(string); ok {
+									pt.id = id
+								}
+
+								// 处理 tool_call.type (应该是 "function")
+								if t, ok := tcMap["type"].(string); ok {
+									pt.fields["type"] = t
+								}
+
+								// 处理 function.name
+								if function, ok := tcMap["function"].(map[string]interface{}); ok {
+									if name, ok := function["name"].(string); ok {
+										if currentBlockType != "tool_use" {
+											s.sendContentBlockStart(writer, flusher, blockIndex, "tool_use", pt.id)
+											currentBlockType = "tool_use"
+
+											// 发送 tool_use 的 name delta
+											nameDelta := map[string]interface{}{
+												"type":  "content_block_delta",
+												"index": blockIndex,
+												"delta": map[string]interface{}{
+													"type":         "input_json_delta",
+													"partial_json": fmt.Sprintf(`{"name":"%s","input":{}`, name),
+												},
+											}
+											nameDeltaData, _ := json.Marshal(nameDelta)
+											fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", string(nameDeltaData))
+											flusher.Flush()
+										}
+										pt.name = name
+									}
+
+									// 处理 function.arguments (分片到达)
+									if args, ok := function["arguments"].(string); ok {
+										pt.args += args
+
+										// 发送 arguments delta（跳过开始括号）
+										if len(pt.args) > len(pt.name)+len(`{"name":"`)+len(`","input":{`) {
+											argPart := pt.args[len(pt.name)+len(`{"name":"`)+len(`","input":{}`):]
+											argsDelta := map[string]interface{}{
+												"type":  "content_block_delta",
+												"index": blockIndex,
+												"delta": map[string]interface{}{
+													"type":         "input_json_delta",
+													"partial_json": argPart,
+												},
+											}
+											argsDeltaData, _ := json.Marshal(argsDelta)
+											fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", string(argsDeltaData))
+											flusher.Flush()
+										}
+									}
+								}
+							}
+							continue
+						}
+
+						// 优先级3: 检查普通 content 文本
+						if content, ok := delta["content"].(string); ok && content != "" {
+							// 如果当前不是 text block，需要先开始一个新的 text block
+							if currentBlockType != "text" {
+								// 先停止之前的 block（如果有）
+								if currentBlockType != "" {
+									s.sendContentBlockStop(writer, flusher, blockIndex)
+									blockIndex++
+								}
+								// 开始新的 text block
+								s.sendContentBlockStart(writer, flusher, blockIndex, "text", "")
+								currentBlockType = "text"
+							}
+
+							// 发送 content_block_delta 事件
+							deltaEvent := map[string]interface{}{
+								"type":  "content_block_delta",
+								"index": blockIndex,
 								"delta": map[string]interface{}{
 									"type": "text_delta",
 									"text": content,
@@ -1271,23 +1456,33 @@ func (s *ProxyService) streamOpenAIToClaude(reader io.Reader, writer io.Writer, 
 						}
 					}
 
-					// 检查是否结�?
+					// 检查是否结束
 					if finishReason, ok := choice["finish_reason"].(string); ok && finishReason != "" {
-						// 不在这里处理结束，等循环结束后统一处理
+						// 如果是 tool_calls 结束，需要完成 tool_use block
+						if finishReason == "tool_calls" && currentBlockType == "tool_use" {
+							// 关闭 JSON 对象
+							closeDelta := map[string]interface{}{
+								"type":  "content_block_delta",
+								"index": blockIndex,
+								"delta": map[string]interface{}{
+									"type":         "input_json_delta",
+									"partial_json": "}}",
+								},
+							}
+							closeData, _ := json.Marshal(closeDelta)
+							fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", string(closeData))
+							flusher.Flush()
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// content_block_stop 事件
-	contentBlockStop := map[string]interface{}{
-		"type":  "content_block_stop",
-		"index": 0,
+	// 停止最后的 content block
+	if currentBlockType != "" {
+		s.sendContentBlockStop(writer, flusher, blockIndex)
 	}
-	blockStopData, _ := json.Marshal(contentBlockStop)
-	fmt.Fprintf(writer, "event: content_block_stop\ndata: %s\n\n", string(blockStopData))
-	flusher.Flush()
 
 	// message_delta 事件
 	messageDelta := map[string]interface{}{

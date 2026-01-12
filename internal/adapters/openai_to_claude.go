@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // OpenAIToClaudeAdapter 将 OpenAI 格式转换为 Claude 格式
@@ -22,6 +24,18 @@ func (a *OpenAIToClaudeAdapter) AdaptRequest(request map[string]interface{}, tar
 		claudeReq["model"] = targetModel
 	} else if model, ok := request["model"].(string); ok {
 		claudeReq["model"] = model
+	}
+
+	// 生成会话ID
+	var sessionID string
+	if messages, ok := request["messages"].([]interface{}); ok {
+		sessionID = GenerateSessionID(messages)
+		if sessionID != "" {
+			log.Debugf("[OpenAI->Claude] Generated session ID: %s", sessionID[:8])
+
+			// 保存到请求中（用于后续）
+			claudeReq["_session_id"] = sessionID
+		}
 	}
 
 	// 转换消息
@@ -72,11 +86,31 @@ func (a *OpenAIToClaudeAdapter) AdaptRequest(request map[string]interface{}, tar
 						"role": "assistant",
 					}
 
+					contentBlocks := make([]interface{}, 0)
+
+					// **关键改进**: 处理 reasoning_content (thinking)
+					if reasoningContent, ok := msgMap["reasoning_content"].(string); ok && reasoningContent != "" {
+						// 获取会话签名
+						sig := GetSignatureForSession(sessionID)
+						if sig == "" {
+							sig = GetThoughtSignature()
+						}
+
+						// Thinking 必须在最前面
+						thinkingBlock := map[string]interface{}{
+							"type":     "thinking",
+							"thinking": reasoningContent,
+						}
+						if sig != "" && len(sig) >= MinSignatureLength {
+							thinkingBlock["signature"] = sig
+							log.Debugf("[OpenAI->Claude] Added signature to thinking block (len=%d)", len(sig))
+						}
+						contentBlocks = append(contentBlocks, thinkingBlock)
+					}
+
 					// 检查是否有 tool_calls
 					if toolCalls, ok := msgMap["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
-						contentBlocks := make([]interface{}, 0)
-
-						// 添加文本内容
+						// 添加文本内容（如果有）
 						if contentStr, ok := content.(string); ok && contentStr != "" {
 							contentBlocks = append(contentBlocks, map[string]interface{}{
 								"type": "text",
@@ -110,7 +144,19 @@ func (a *OpenAIToClaudeAdapter) AdaptRequest(request map[string]interface{}, tar
 						assistantMsg["content"] = contentBlocks
 					} else {
 						// 普通文本消息
-						assistantMsg["content"] = content
+						if len(contentBlocks) > 0 {
+							// 已有 thinking 块
+							if contentStr, ok := content.(string); ok && contentStr != "" {
+								contentBlocks = append(contentBlocks, map[string]interface{}{
+									"type": "text",
+									"text": contentStr,
+								})
+							}
+							assistantMsg["content"] = contentBlocks
+						} else {
+							// 纯文本
+							assistantMsg["content"] = content
+						}
 					}
 
 					claudeMessages = append(claudeMessages, assistantMsg)
@@ -346,12 +392,12 @@ func (a *OpenAIToClaudeAdapter) AdaptStreamStart(model string) []map[string]inte
 	messageStart := map[string]interface{}{
 		"type": "message_start",
 		"message": map[string]interface{}{
-			"id":      "msg_" + generateID(),
-			"type":    "message",
-			"role":    "assistant",
-			"content": []interface{}{},
-			"model":   model,
-			"stop_reason":  nil,
+			"id":            "msg_" + generateID(),
+			"type":          "message",
+			"role":          "assistant",
+			"content":       []interface{}{},
+			"model":         model,
+			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]interface{}{
 				"input_tokens":  0,
@@ -390,7 +436,7 @@ func (a *OpenAIToClaudeAdapter) AdaptStreamEnd() []map[string]interface{} {
 	messageDelta := map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
-			"stop_reason":  "end_turn",
+			"stop_reason":   "end_turn",
 			"stop_sequence": nil,
 		},
 		"usage": map[string]interface{}{
